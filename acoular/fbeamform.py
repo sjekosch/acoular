@@ -38,13 +38,14 @@ invert, dot, newaxis, zeros, empty, fft, float32, float64, complex64, linalg, \
 where, searchsorted, pi, multiply, sign, diag, arange, sqrt, exp, log10, int,\
 reshape, hstack, vstack, eye, tril, size, clip, tile, round, delete, \
 absolute, argsort, sort, sum, hsplit, fill_diagonal, zeros_like, isclose, \
-vdot, flatnonzero, einsum, ndarray, isscalar, inf
+vdot, flatnonzero, einsum, ndarray, isscalar, inf, complex128, arctan2 ,mod
 
 from sklearn.linear_model import LassoLars, LassoLarsCV, LassoLarsIC,\
 OrthogonalMatchingPursuit, ElasticNet, OrthogonalMatchingPursuitCV, Lasso
 
 from scipy.optimize import nnls, linprog, fmin_l_bfgs_b
-from scipy.linalg import inv, eigh, eigvals, fractional_matrix_power
+from scipy.special import spherical_yn, spherical_jn, sph_harm
+from scipy.linalg import inv, eigh, eigvals, fractional_matrix_power, norm
 from warnings import warn
 
 from traits.api import HasPrivateTraits, Float, Int, ListInt, ListFloat, \
@@ -54,6 +55,8 @@ from traits.trait_errors import TraitError
 
 from .fastFuncs import beamformerFreq, calcTransfer, calcPointSpreadFunction, \
 damasSolverGaussSeidel
+
+
 
 from .h5cache import H5cache
 from .h5files import H5CacheFileBase
@@ -162,6 +165,87 @@ class SteeringVector( HasPrivateTraits ):
     def _get_inv_digest( self ):
         return digest( self )
     
+    
+     ##############################################################################
+    #: Order of spherical harmonic source
+    lOrder = Int(0,
+                   desc ="Order of spherical harmonic")
+    
+    mOrder = Int(0,
+                   desc ="Order of spherical harmonic")
+    
+    alpha = CArray(desc="coefficients of the (lOrder,) spherical harmonic mode")
+        
+    
+    def spherical_hn1(n,z,derivativearccos=False):
+       """ Spherical Hankel Function of the First Kind """
+       return spherical_jn(n,z,derivative=False)+1j*spherical_yn(n,z,derivative=False) 
+   
+    def get_radiation_angles(self):
+        #direction of the Spherical Harmonics
+        direc = array(self.direction, dtype = float)
+        direc = direc/norm(direc)
+        #rotation of harmonics according to dirc vector
+        #r = R.from_rotvec(direc)
+        #source_to_mic_vecs = r.apply(source_to_mic_vecs)
+        
+        # distances
+        source_to_mic_vecs = self.mics.mpos-array(
+            self.loc).reshape((3, 1))
+        source_to_mic_vecs[2] *= -1 # invert z-axis (acoular)    #-1
+        # z-axis (acoular) -> y-axis (spherical)
+        # y-axis (acoular) -> z-axis (spherical)
+        #theta
+        ele = arctan2(sqrt(source_to_mic_vecs[0]**2 + source_to_mic_vecs[2]**2),source_to_mic_vecs[1])
+        ele +=arctan2(sqrt(direc[0]**2 + direc[2]**2), direc[1])  
+        ele += pi*.5 # convert from [-pi/2, pi/2] to [0,pi] range
+        #phi
+        azi = arctan2(source_to_mic_vecs[2],source_to_mic_vecs[0]) 
+        azi += arctan2(direc[2],direc[0]) 
+        azi = mod(azi,2*pi)
+        return azi, ele
+
+    def get_modes(self):
+        azi, ele = self.get_radiation_angles() # angles between source and mics 
+        modes = zeros((azi.shape[0], (self.lOrder+1)**2), dtype=complex128)
+        i = 0
+        for l in range(self.lOrder+1):
+            for m in range(-l, l+1):
+                modes[:, i] = sph_harm(m, l, azi, ele)
+                i += 1
+        return modes
+      
+    def SphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
+        nMics = distGridToAllMics.shape[0]
+        for cntMics in range(nMics):
+            
+            expArg = float32(waveNumber[0] * (distGridToAllMics[cntMics] - distGridToArrayCenter[0]))
+            Y_mn = self.get_modes() 
+            result[cntMics] = self.spherical_hn1(expArg,self.lOrder)* Y_mn*distGridToArrayCenter[0] / distGridToAllMics[cntMics]
+            return result
+    
+    def calcSphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
+        """ Calculates the transfer functions between the various mics and gridpoints.
+        
+        Parameters
+        ----------
+        distGridToArrayCenter : float64[nGridpoints]
+            Distance of all gridpoints to the center of sensor array
+        distGridToAllMics : float64[nGridpoints, nMics]
+            Distance of all gridpoints to all sensors of array
+        waveNumber : complex128
+            The wave number should be stored in the imag-part
+    
+        Returns
+        -------
+        The Transferfunctions in format complex128[nGridPoints, nMics].
+        """
+        nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
+        result = zeros((nGridPoints, nMics), complex128)
+        # transfer routine: parallelized over Gridpoints
+        self.SphericalHarmonicTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
+        return result    
+    
     def transfer(self, f, ind=None):
         """
         Calculates the transfer matrix for one frequency. 
@@ -218,7 +302,8 @@ class SteeringVector( HasPrivateTraits ):
                 }[self.steer_type]
         return func(self.transfer(f, ind))
     
-    
+ 
+
 class BeamformerBase( HasPrivateTraits ):
     """
     Beamforming using the basic delay-and-sum algorithm in the frequency domain.
@@ -1741,6 +1826,16 @@ class BeamformerCMF ( BeamformerBase ):
     max_iter = Int(500, 
         desc="maximum number of iterations")
 
+
+    
+    
+    sourcetype = Trait('sphericalharmonic','monopole', 
+        desc="type of source used in transfer function")
+    
+    
+    lOrder=Int(0, 
+        desc="maximum number of source type order")
+    
     
     #: Unit multiplier for evaluating, e.g., nPa instead of Pa. 
     #: Values are converted back before returning. 
@@ -1801,7 +1896,10 @@ class BeamformerCMF ( BeamformerBase ):
             if not fr[i]:
                 csm = array(self.freq_data.csm[i], dtype='complex128',copy=1)
 
-                h = self.steer.transfer(f[i]).T
+                if self.sourcetype == 'monopole': 
+                    h = self.steer.transfer(f[i]).T
+                elif self.sourcetype == 'sphericalharmonic': 
+                    h = self.steer.SphericalHarmonicTransfer(f[i]).T
                 
                 # reduced Kronecker product (only where solution matrix != 0)
                 Bc = ( h[:,:,newaxis] * \

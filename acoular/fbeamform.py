@@ -38,7 +38,8 @@ invert, dot, newaxis, zeros, empty, fft, float32, float64, complex64, linalg, \
 where, searchsorted, pi, multiply, sign, diag, arange, sqrt, exp, log10, int,\
 reshape, hstack, vstack, eye, tril, size, clip, tile, round, delete, \
 absolute, argsort, sort, sum, hsplit, fill_diagonal, zeros_like, isclose, \
-vdot, flatnonzero, einsum, ndarray, isscalar, inf, complex128, arctan2 ,mod
+vdot, flatnonzero, einsum, ndarray, isscalar, inf, complex128, arctan2 ,mod, sin ,cos,\
+tile,concatenate
 
 from sklearn.linear_model import LassoLars, LassoLarsCV, LassoLarsIC,\
 OrthogonalMatchingPursuit, ElasticNet, OrthogonalMatchingPursuitCV, Lasso
@@ -50,7 +51,7 @@ from warnings import warn
 
 from traits.api import HasPrivateTraits, Float, Int, ListInt, ListFloat, \
 CArray, Property, Instance, Trait, Bool, Range, Delegate, Enum, Any, \
-cached_property, on_trait_change, property_depends_on
+cached_property, on_trait_change, property_depends_on, Tuple
 from traits.trait_errors import TraitError
 
 from .fastFuncs import beamformerFreq, calcTransfer, calcPointSpreadFunction, \
@@ -166,15 +167,22 @@ class SteeringVector( HasPrivateTraits ):
         return digest( self )
     
     
-     ##############################################################################
+    ##############################################################################
+    #: Type of source
+    sourcetype = Trait('Sphericalharmonic','Monopole', 
+        desc="type of source used in transfer function")
+    
     #: Order of spherical harmonic source
     lOrder = Int(0,
                    desc ="Order of spherical harmonic")
+    #: Vector to define the orientation of the SphericalHarmonic. 
+    direction = Tuple((1.0, 0.0, 0.0),
+        desc="Spherical Harmonic orientation")
     
-    mOrder = Int(0,
-                   desc ="Order of spherical harmonic")
+    #mOrder = Int(0,
+    #               desc ="Order of spherical harmonic")
     
-    alpha = CArray(desc="coefficients of the (lOrder,) spherical harmonic mode")
+    #alpha = CArray(desc="coefficients of the (lOrder,) spherical harmonic mode")
         
     
     def spherical_hn1(n,z,derivativearccos=False):
@@ -191,7 +199,7 @@ class SteeringVector( HasPrivateTraits ):
         
         # distances
         source_to_mic_vecs = self.mics.mpos-array(
-            self.loc).reshape((3, 1))
+            self._ref).reshape((3, 1))
         source_to_mic_vecs[2] *= -1 # invert z-axis (acoular)    #-1
         # z-axis (acoular) -> y-axis (spherical)
         # y-axis (acoular) -> z-axis (spherical)
@@ -214,6 +222,17 @@ class SteeringVector( HasPrivateTraits ):
                 modes[:, i] = sph_harm(m, l, azi, ele)
                 i += 1
         return modes
+    
+    # def get_mode(self):
+    #     azi, ele = self.get_radiation_angles() # angles between source and mics 
+    #     mode = zeros((azi.shape[0], (self.lOrder+1)**2), dtype=complex128)
+    #     i = 0
+    #     for l in range(self.lOrder+1):
+    #         for m in range(-l, l+1):
+    #             modes[:, i] = sph_harm(m, l, azi, ele)
+    #             i += 1
+    #     return modes
+    
       
     def SphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
         nMics = distGridToAllMics.shape[0]
@@ -221,8 +240,14 @@ class SteeringVector( HasPrivateTraits ):
             
             expArg = float32(waveNumber[0] * (distGridToAllMics[cntMics] - distGridToArrayCenter[0]))
             Y_mn = self.get_modes() 
-            result[cntMics] = self.spherical_hn1(expArg,self.lOrder)* Y_mn*distGridToArrayCenter[0] / distGridToAllMics[cntMics]
-            return result
+            # i = 0
+            # for l in range(self.lOrder+1):
+            #     for m in range(-l, l+1):
+            #         i += 1
+                    #result[cntMics] = Y_mn * self.spherical_hn1(expArg,self.lOrder)*distGridToArrayCenter[0] / distGridToAllMics[cntMics]
+            #result[cntMics] = Y_mn * ((cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntMics])[:,newaxis]
+            result[cntMics] = Y_mn * tile((cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntMics],((self.lOrder+1)**2,1)).T
+        return result
     
     def calcSphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
         """ Calculates the transfer functions between the various mics and gridpoints.
@@ -238,11 +263,11 @@ class SteeringVector( HasPrivateTraits ):
     
         Returns
         -------
-        The Transferfunctions in format complex128[nGridPoints, nMics].
+        The Transferfunctions in format complex128[nGridPoints, nMics, (lOrder+1)**2].
         """
         nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
-        result = zeros((nGridPoints, nMics), complex128)
-        # transfer routine: parallelized over Gridpoints
+        result = zeros((nGridPoints, nMics,(self.lOrder+1)**2), complex128)
+        #### transfer routine: parallelized over Gridpoints
         self.SphericalHarmonicTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
         return result    
     
@@ -267,14 +292,23 @@ class SteeringVector( HasPrivateTraits ):
         #if self.cached:
         #    warn('Caching of transfer function is not yet supported!', Warning)
         #    self.cached = False
+        if self.sourcetype =='Monopole': 
+            if ind is None:
+                trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+            elif not isinstance(ind,ndarray):
+                trans = calcTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+            else:
+                trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+            return trans
+        elif self.sourcetype =='Sphericalharmonic':
+            if ind is None:
+                trans = self.calcSphericalHarmonicTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+            elif not isinstance(ind,ndarray):
+                trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+            else:
+                trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+            return trans
         
-        if ind is None:
-            trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
-        elif not isinstance(ind,ndarray):
-            trans = calcTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
-        else:
-            trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
-        return trans
     
     def steer_vector(self, f, ind=None):
         """
@@ -527,12 +561,18 @@ class BeamformerBase( HasPrivateTraits ):
 #                        print("cached results are complete! return.")
                 else:
 #                    print("no caching, calculate result")
-                    ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
+                    if self.steer.sourcetype == 'Sphericalharmonic':
+                        ac = zeros((numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2), dtype=self.precision)
+                    else:
+                        ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
                     fr = zeros(numfreq, dtype='int8')
                     self.calc(ac,fr)
             else:
 #                print("no caching activated, calculate result")
-                ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
+                if self.steer.sourcetype == 'Sphericalharmonic':
+                    ac = zeros((numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2), dtype=self.precision)
+                else:
+                    ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
                 fr = zeros(numfreq, dtype='int8')
                 self.calc(ac,fr)
         return ac
@@ -695,8 +735,13 @@ class BeamformerBase( HasPrivateTraits ):
                          'for all queried frequencies. Check '
                          'freq_data.ind_low and freq_data.ind_high!',
                           Warning, stacklevel = 2)
-        return h.reshape(self.steer.grid.shape)
-
+        
+        if self.steer.sourcetype == 'Sphericalharmonic':
+            return h.reshape([self.steer.grid.size,(self.steer.lOrder+1)**2])               
+        else:
+            return h.reshape(self.steer.grid.shape)
+                                   
+        
 
     def integrate(self, sector):
         """
@@ -1826,15 +1871,6 @@ class BeamformerCMF ( BeamformerBase ):
     max_iter = Int(500, 
         desc="maximum number of iterations")
 
-
-    
-    
-    sourcetype = Trait('sphericalharmonic','monopole', 
-        desc="type of source used in transfer function")
-    
-    
-    lOrder=Int(0, 
-        desc="maximum number of source type order")
     
     
     #: Unit multiplier for evaluating, e.g., nPa instead of Pa. 
@@ -1853,6 +1889,7 @@ class BeamformerCMF ( BeamformerBase ):
     def _get_digest( self ):
         return digest( self )
    
+    
 
     def calc(self, ac, fr):
         """
@@ -1896,39 +1933,70 @@ class BeamformerCMF ( BeamformerBase ):
             if not fr[i]:
                 csm = array(self.freq_data.csm[i], dtype='complex128',copy=1)
 
-                if self.sourcetype == 'monopole': 
+                if self.steer.sourcetype == 'Monopole': 
                     h = self.steer.transfer(f[i]).T
-                elif self.sourcetype == 'sphericalharmonic': 
-                    h = self.steer.SphericalHarmonicTransfer(f[i]).T
-                
-                # reduced Kronecker product (only where solution matrix != 0)
-                Bc = ( h[:,:,newaxis] * \
+                    # reduced Kronecker product (only where solution matrix != 0)
+                    Bc = ( h[:,:,newaxis] * \
                        h.conjugate().T[newaxis,:,:] )\
                          .transpose(2,0,1)
-                Ac = Bc.reshape(nc*nc,numpoints)
+                    Ac = Bc.reshape(nc*nc,numpoints)
                 
-                # get indices for upper triangular matrices (use tril b/c transposed)
-                ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
+                    # get indices for upper triangular matrices (use tril b/c transposed)
+                    ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
                 
-                ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
-                if self.r_diag:
+                    ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
+                    if self.r_diag:
                     # omit main diagonal for noise reduction
-                    ind_reim = hstack([ind_im0, ind_im0])
-                else:
+                        ind_reim = hstack([ind_im0, ind_im0])
+                    else:
                     # take all real parts -- also main diagonal
-                    ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
-                    ind_reim[0]=True # TODO: warum hier extra definiert??
+                        ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
+                        ind_reim[0]=True # TODO: warum hier extra definiert??
 #                    if sigma2:
 #                        # identity matrix, needed when noise term sigma is used
 #                        I  = eye(nc).reshape(nc*nc,1)                
 #                        A = realify( hstack([Ac, I])[ind,:] )[ind_reim,:]
 #                        # ... ac[i] = model.coef_[:-1]
 #                    else:
+                    A = realify( Ac [ind,:] )[ind_reim,:]
+                    
+                elif self.steer.sourcetype == 'Sphericalharmonic': 
+                    h = self.steer.transfer(f[i]).T
+                    print(h.shape)
+                    
+                    Ai =  zeros((h.shape[0],nc*nc, numpoints))
+                    for i in range(h.shape[0]):
+                        Bc = ( h[i,:,:,newaxis] * \
+                              h[i].conjugate().T[newaxis,:,:] )\
+                                .transpose(2,0,1)
+                        Ac = Bc.reshape(nc*nc,numpoints)
+                        
+                        # get indices for upper triangular matrices (use tril b/c transposed)
+                        ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
+                        ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
+                        if self.r_diag:
+                            # omit main diagonal for noise reduction
+                            ind_reim = hstack([ind_im0, ind_im0])
+                        else:
+                            # take all real parts -- also main diagonal
+                            ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
+                            ind_reim[0]=True # TODO: warum hier extra definiert??
+                        
+                        Ai[i] = realify( Ac [ind,:] )[ind_reim,:]
+                        print(Ai.shape)
+                    #A = concatenate((Ai[0],Ai[1],Ai[2],Ai[3]), axis=1)
+                    #A = concatenate((Ai[i] for i in range(h.shape[0])), axis=1)
+                    A = Ai.transpose(1,2,0).flatten().reshape(nc*nc, numpoints*h.shape[0])
+                    #A = reshape(Ai,(nc*nc, numpoints*h.shape[0]))
+                    print(A.shape)
 
-                A = realify( Ac [ind,:] )[ind_reim,:]
+                        
                 # use csm.T for column stacking reshape!
                 R = realify( reshape(csm.T, (nc*nc,1))[ind,:] )[ind_reim,:] * unit
                 # choose method
+                
+                
+                
                 if self.method == 'LassoLars':
                     model = LassoLars(alpha = self.alpha * unit,
                                       max_iter = self.max_iter)
@@ -1969,8 +2037,15 @@ class BeamformerCMF ( BeamformerBase ):
                     model.fit(A,R[:,0])
                     ac[i] = model.coef_[:] / unit
                 fr[i] = 1
+     
         
-                
+        
+class BeamformerCMFC ( BeamformerCMF ):
+     """
+    Covariance Matrix Fitting with coherance, see :ref:`Yardibi et al., 2008<Yardibi2008>`.
+    This is not really a beamformer, but an inverse method.
+    """
+
                 
                 
 class BeamformerGIB(BeamformerEig):  #BeamformerEig #BeamformerBase

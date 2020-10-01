@@ -26,17 +26,34 @@ from scipy.special import spherical_yn, spherical_jn, sph_harm
 
 
 def spherical_hn1(n,z,derivativearccos=False):
-   """ Spherical Hankel Function of the First Kind """
+   """ Spherical Hankel Function of the First Kind 
+   
+   """
    return spherical_jn(n,z,derivative=False)+1j*spherical_yn(n,z,derivative=False) 
 
 def get_radiation_angles(direction,mpos, sourceposition):
+    """
+    Returns azimuthal and elevation angles between the mics and the source 
+    
+    Parameters
+    ----------
+    direction : array of floats
+        Spherical Harmonic orientation
+    mpos : array of floats
+            x, y, z position of microphones
+    sourceposition : array of floats
+            position of the source
+            
+        ========================
+        
+    Returns
+    -------
+    azi, ele : array of floats
+        the angle between the mics and the source 
+    """
     #direction of the Spherical Harmonics
     direc = array(direction, dtype = float)
     direc = direc/norm(direc)
-    #rotation of harmonics according to dirc vector
-    #r = R.from_rotvec(direc)
-    #source_to_mic_vecs = r.apply(source_to_mic_vecs)
-    
     # distances
     source_to_mic_vecs = mpos-array(
         sourceposition).reshape((3, 1))
@@ -54,6 +71,27 @@ def get_radiation_angles(direction,mpos, sourceposition):
     return azi, ele
 
 def get_modes(lOrder, direction, mpos , sourceposition = array([0,0,0])):
+    """
+    Returns Spherical Harmonic Radiation Pattern at the Microphones
+      
+    Parameters
+    ----------
+    lOrder : int
+        Maximal order of spherical harmonic
+    direction : array of floats
+        Spherical Harmonic orientation
+    mpos : array of floats
+            x, y, z position of microphones
+    sourceposition : array of floats
+            position of the source
+            
+        ========================
+
+    Returns
+    -------
+    modes : array of floats
+        the radiation values at each microphone for each mode
+    """
     azi, ele = get_radiation_angles(direction,mpos,sourceposition) # angles between source and mics 
     modes = zeros((azi.shape[0], (lOrder+1)**2), dtype=complex128)
     i = 0

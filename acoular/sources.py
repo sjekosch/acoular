@@ -12,6 +12,7 @@
     MaskedTimeSamples
     PointSource
     PointSourceDipole
+    SphericalHarmonicSource
     MovingPointSource
     UncorrelatedNoiseSource
     SourceMixer

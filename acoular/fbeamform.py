@@ -166,8 +166,6 @@ class SteeringVector( HasPrivateTraits ):
     def _get_inv_digest( self ):
         return digest( self )
     
-    
-    ##############################################################################
     #: Type of source
     sourcetype = Trait('Sphericalharmonic','Monopole', 
         desc="type of source used in transfer function")
@@ -179,14 +177,12 @@ class SteeringVector( HasPrivateTraits ):
     direction = Tuple((1.0, 0.0, 0.0),
         desc="Spherical Harmonic orientation")
     
-    #mOrder = Int(0,
-    #               desc ="mOrder of spherical harmonic")
 
     def SphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
         nPoints = distGridToAllMics.shape[0]
         for cntPoint in range(nPoints):
             expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
-            #the radiation patter
+            #the radiation pattern
             Y_mni = get_modes(lOrder = self.lOrder, direction= self.direction,\
                               mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
             #result[cntMics] = Y_mn * tile(self.spherical_hn1(self.lOrder,expArg)*distGridToArrayCenter[0] / distGridToAllMics[cntMics],((self.lOrder+1)**2,1)).T
@@ -244,7 +240,7 @@ class SteeringVector( HasPrivateTraits ):
             else:
                 trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
             return trans
-        else :
+        else :  #assume Monopol Transfer
             if ind is None:
                 trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
             elif not isinstance(ind,ndarray):
@@ -252,8 +248,7 @@ class SteeringVector( HasPrivateTraits ):
             else:
                 trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
             return trans
-
-        
+      
     
     def steer_vector(self, f, ind=None):
         """
@@ -1815,9 +1810,7 @@ class BeamformerCMF ( BeamformerBase ):
     #: defaults to 500
     max_iter = Int(500, 
         desc="maximum number of iterations")
-
-    
-    
+  
     #: Unit multiplier for evaluating, e.g., nPa instead of Pa. 
     #: Values are converted back before returning. 
     #: Temporary conversion may be necessary to not reach machine epsilon
@@ -1888,7 +1881,6 @@ class BeamformerCMF ( BeamformerBase ):
                 
                     # get indices for upper triangular matrices (use tril b/c transposed)
                     ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
-                
                     ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
                     if self.r_diag:
                     # omit main diagonal for noise reduction
@@ -1906,16 +1898,14 @@ class BeamformerCMF ( BeamformerBase ):
                     A = realify( Ac [ind,:] )[ind_reim,:]
                     
                 elif self.steer.sourcetype == 'Sphericalharmonic': 
-                    h = self.steer.transfer(f[i]).T
-                    #print(h.shape)
-                    
+                    # transfer for each source type
+                    h = self.steer.transfer(f[i]).T                    
                     Ai =  zeros((h.shape[0],nc*nc, numpoints))
                     for i in range(h.shape[0]):
                         Bc = ( h[i,:,:,newaxis] * \
                               h[i].conjugate().T[newaxis,:,:] )\
                                 .transpose(2,0,1)
                         Ac = Bc.reshape(nc*nc,numpoints)
-                        
                         # get indices for upper triangular matrices (use tril b/c transposed)
                         ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
                         ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
@@ -1928,20 +1918,14 @@ class BeamformerCMF ( BeamformerBase ):
                             ind_reim[0]=True # TODO: warum hier extra definiert??
                         
                         Ai[i] = realify( Ac [ind,:] )[ind_reim,:]
-                        #print(Ai.shape)
-                    #A = concatenate((Ai[0],Ai[1],Ai[2],Ai[3]), axis=1)
-                    #A = concatenate((Ai[i] for i in range(h.shape[0])), axis=1)
+                    #extend matrix to multiple source types
                     A = Ai.transpose(1,2,0).flatten().reshape(nc*nc, numpoints*h.shape[0])
-                    #A = reshape(Ai,(nc*nc, numpoints*h.shape[0]))
-                    #print(A.shape)
 
                         
                 # use csm.T for column stacking reshape!
                 R = realify( reshape(csm.T, (nc*nc,1))[ind,:] )[ind_reim,:] * unit
                 # choose method
-                
-                
-                
+                                
                 if self.method == 'LassoLars':
                     model = LassoLars(alpha = self.alpha * unit,
                                       max_iter = self.max_iter)

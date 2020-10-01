@@ -167,7 +167,7 @@ class SteeringVector( HasPrivateTraits ):
         return digest( self )
     
     #: Type of source
-    sourcetype = Trait('Sphericalharmonic','Monopole', 
+    sourcetype = Trait('Monopole', 'Sphericalharmonic',
         desc="type of source used in transfer function")
     
     #: Order of spherical harmonic source

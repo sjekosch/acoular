@@ -9,15 +9,61 @@ Implements tools for Acoular.
 .. autosummary::
     :toctree: generated/
 
+    spherical_hn1
+    get_radiation_angles
+    get_modes
     barspectrum
     bardata
 """
 
 from traits.api import HasStrictTraits
-from numpy import array, concatenate, newaxis, where
+from numpy import array, concatenate, newaxis, where,arctan2,sqrt,pi,mod,zeros,complex128
+from numpy.linalg import norm
 from numpy.ma import masked_where
 from .spectra import synthetic
 
+from scipy.special import spherical_yn, spherical_jn, sph_harm
+
+
+def spherical_hn1(n,z,derivativearccos=False):
+   """ Spherical Hankel Function of the First Kind """
+   return spherical_jn(n,z,derivative=False)+1j*spherical_yn(n,z,derivative=False) 
+
+def get_radiation_angles(direction,mpos, sourceposition):
+    #direction of the Spherical Harmonics
+    direc = array(direction, dtype = float)
+    direc = direc/norm(direc)
+    #rotation of harmonics according to dirc vector
+    #r = R.from_rotvec(direc)
+    #source_to_mic_vecs = r.apply(source_to_mic_vecs)
+    
+    # distances
+    source_to_mic_vecs = mpos-array(
+        sourceposition).reshape((3, 1))
+    source_to_mic_vecs[2] *= -1 # invert z-axis (acoular)    #-1
+    # z-axis (acoular) -> y-axis (spherical)
+    # y-axis (acoular) -> z-axis (spherical)
+    #theta
+    ele = arctan2(sqrt(source_to_mic_vecs[0]**2 + source_to_mic_vecs[2]**2),source_to_mic_vecs[1])
+    ele +=arctan2(sqrt(direc[0]**2 + direc[2]**2), direc[1])  
+    ele += pi*.5 # convert from [-pi/2, pi/2] to [0,pi] range
+    #phi
+    azi = arctan2(source_to_mic_vecs[2],source_to_mic_vecs[0]) 
+    azi += arctan2(direc[2],direc[0]) 
+    azi = mod(azi,2*pi)
+    return azi, ele
+
+def get_modes(lOrder, direction, mpos , sourceposition = array([0,0,0])):
+    azi, ele = get_radiation_angles(direction,mpos,sourceposition) # angles between source and mics 
+    modes = zeros((azi.shape[0], (lOrder+1)**2), dtype=complex128)
+    i = 0
+    for l in range(lOrder+1):
+        for m in range(-l, l+1):
+            modes[:, i] = sph_harm(m, l, azi, ele)
+            if m<0:
+                modes[:, i]=modes[:, i].conj()*1j             
+            i += 1
+    return modes
 
 def barspectrum(data, fftfreqs, num = 3, bar = True, xoffset = 0.0):
     """

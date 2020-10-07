@@ -11,6 +11,9 @@
     Grid
     RectGrid
     RectGrid3D
+    ImportGrid
+    LineGrid
+    GridList
     Sector
     RectSector
     CircSector
@@ -21,13 +24,15 @@
 
 # imports from other packages
 from numpy import mgrid, s_, array, arange, isscalar, absolute, ones, argmin,\
-zeros, where,  asfarray,concatenate,sum,ma,ones_like,inf,copysign,fabs
-
+zeros, where,  asfarray,concatenate,sum,ma,ones_like,inf,copysign,fabs ,append
+from numpy.linalg import norm
 from traits.api import HasPrivateTraits, Float, Property, Any, \
-property_depends_on, cached_property, Bool, List, Instance
+property_depends_on, cached_property, Bool, List, Instance, File ,on_trait_change,\
+CArray, Tuple, Int
 from traits.trait_errors import TraitError
 #from matplotlib.path import Path
 from scipy.spatial import Delaunay
+from os import path
 from .internal import digest
 
 
@@ -657,6 +662,175 @@ class RectGrid3D( RectGrid):
         xi1, yi1, zi1 = self.index(min(x1, x2), min(y1, y2), min(z1, z2))
         xi2, yi2, zi2 = self.index(max(x1, x2), max(y1, y2), max(z1, z2))
         return s_[xi1:xi2+1], s_[yi1:yi2+1], s_[zi1:zi2+1]
+
+
+
+
+
+class ImportGrid( Grid ):
+    """
+    Virtual base class for grid geometries.
+    
+    Defines the common interface for all grid classes and
+    provides facilities to query grid properties and related data. This class
+    may be used as a base for specialized grid implementaions. It should not
+    be used directly as it contains no real functionality.
+    """
+
+    # internal identifier
+    digest = Property
+    
+    #: Name of the .xml-file from wich to read the data.
+    from_file = File(filter=['*.xml'],
+        desc="name of the xml file to import")
+    
+    
+    gpos_file = CArray(dtype=float,
+        desc="x, y, z position of all Grid Points")
+    
+
+    #: Basename of the .xml-file, without the extension; is set automatically / readonly.
+    basename = Property( depends_on = 'from_file',
+        desc="basename of xml file")
+    
+    @cached_property
+    def _get_basename( self ):
+        return path.splitext(path.basename(self.from_file))[0]
+
+    def _get_digest( self ):
+        return ''
+
+    # 'digest' is a placeholder for other properties in derived classes,
+    # necessary to trigger the depends on mechanism
+    @property_depends_on('basename')
+    def _get_size ( self ):
+        return self.gpos.shape[-1]
+
+    # 'digest' is a placeholder for other properties in derived classes
+    @property_depends_on('basename')
+    def _get_shape ( self ):
+        return self.gpos.shape[-1]
+
+    @property_depends_on('basename')
+    def _get_gpos( self ):
+        return self.gpos_file
+
+    
+    @on_trait_change('basename')
+    def import_gpos( self ):
+        """
+        Import the microphone positions from .xml file.
+        Called when :attr:`basename` changes.
+        """
+        if not path.isfile(self.from_file):
+            # no file there
+            self.gpos_file = array([], 'd')
+            return
+        import xml.dom.minidom
+        doc = xml.dom.minidom.parse(self.from_file)
+        names = []
+        xyz = []
+        for el in doc.getElementsByTagName('pos'):
+            names.append(el.getAttribute('Name'))
+            xyz.append(list(map(lambda a : float(el.getAttribute(a)), 'xyz')))
+        self.gpos_file = array(xyz, 'd').swapaxes(0, 1)
+        
+    
+    
+class LineGrid( Grid ):
+    """
+    Class for Line grid geometries.
+    
+    """
+    
+    #: Staring point of the Grid
+    loc = Tuple((0.0, 0.0, 0.0))
+
+    #: Vector to define the orientation of the line source
+    direction = Tuple((1.0, 0.0, 0.0),
+        desc="Line orientation ")
+    
+    #: Vector to define the length of the line source in meter
+    length = Float(1,desc="length of the line source")
+    
+    #:number of grid points.
+    numpoints = Int(1,desc="length of the line source")
+    
+    #: Overall number of grid points. Readonly; is set automatically when
+    #: other grid defining properties are set
+    size = Property(desc="overall number of grid points")
+
+    #: Grid positions as (3, :attr:`size`) array of floats, without invalid
+    #: microphones; readonly.
+    gpos = Property(desc="x, y, z positions of grid points")
+
+    # internal identifier
+    digest = Property
+
+    def _get_digest( self ):
+        ''
+
+    # 'digest' is a placeholder for other properties in derived classes,
+    # necessary to trigger the depends on mechanism
+    @property_depends_on('numpoints')
+    def _get_size ( self ):
+        return self.gpos.shape[-1]
+
+    # 'digest' is a placeholder for other properties in derived classes
+    @property_depends_on('numpoints')
+    def _get_shape ( self ):
+        return self.gpos.shape[-1]
+
+    @property_depends_on('numpoints,length,direction,loc')
+    def _get_gpos( self ):
+        dist = self.length / self.numpoints 
+        loc = array(self.loc, dtype = float).reshape((3, 1)) 
+        direc_n = self.direction/norm(self.direction)
+        pos = zeros((self.numpoints,3))
+        for s in range(self.numpoints):
+            pos[s] = (loc.T+direc_n*dist*s)
+        return pos.T
+    
+
+
+
+
+class GridMerger( Grid ):
+    """
+    Base class for merging different grid geometries.
+    
+    """
+
+    #: Overall number of grid points. Readonly; is set automatically when
+    #: other grid defining properties are set
+    Grids = List(desc="List of Grids")
+
+
+    # internal identifier
+    digest = Property
+
+    def _get_digest( self ):
+        return ''
+
+    # 'digest' is a placeholder for other properties in derived classes,
+    # necessary to trigger the depends on mechanism
+    @property_depends_on('digest')
+    def _get_size ( self ):
+        return self.gpos.shape[-1]
+
+    # 'digest' is a placeholder for other properties in derived classes
+    @property_depends_on('digest')
+    def _get_shape ( self ):
+        return self.gpos.shape[-1]
+
+    @property_depends_on('digest')
+    def _get_gpos( self ):
+        bpos = zeros((3,0))
+        for grid in self.Grids:
+            bpos = append(bpos,grid.gpos, axis = 1)
+        return bpos
+    
+    
 
 
 

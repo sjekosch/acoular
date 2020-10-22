@@ -568,7 +568,6 @@ class PointSourceDipole ( PointSource ):
         #from the end of the calculated signal.
         
         mpos = self.mics.mpos
-        
         # position of the dipole as (3,1) vector
         loc = array(self.loc, dtype = float).reshape((3, 1)) 
         # direction vector from tuple
@@ -627,18 +626,10 @@ class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
     # internal identifier
     digest = Property( 
         depends_on = ['mics.digest', 'signal.digest', 'loc', \
-         'env.digest', 'start_t', 'start', 'up', 'direction', '__class__'], 
+         'env.digest', 'start_t', 'start', 'up', 'direction', 'movement','__class__'], 
         )
         
-    #: movement for every monopole    
-    #: translation is a line source in direction which end moves along the trajectory
-    #: rotation is a rotation around the direction vector, sources perpendicular to the trajectory 
-    #: rotation is a rotation around the direction vector, sources parallel to the trajectory   
-    movement = Trait('translation','rotation',
-        desc="kind of movement")
-    movement = Trait('translation','rotation','rotation2',
-        desc="kind of movement")
-    
+
     @cached_property
     def _get_digest( self ):
         return digest(self)    
@@ -715,17 +706,9 @@ class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
             trajg1 = array(self.trajectory.location( te, der=1))[:,0][:,newaxis]
             
             #movement = Trait('translation','rotation','rotation2',
-            if self.movement == 'translation':
-                rm1 = self.env._r(loc + dir2, mpos)  #dir2
-                rm2 = self.env._r(loc - dir2, mpos)  #dir2
+            rm1 = self.env._r(loc + dir2, mpos)  #dir2
+            rm2 = self.env._r(loc - dir2, mpos)  #dir2
                 
-            elif self.movement == 'rotation':
-                rm1 = self.env._r(loc + cross(dir2.T,trajg1.T).T, mpos)  #dir2
-                rm2 = self.env._r(loc - cross(dir2.T,trajg1.T).T, mpos)  #dir2
-                
-            elif self.movement == 'rotation2':
-                rm1 = self.env._r(loc + norm(dir2)*trajg1/norm(trajg1), mpos)  #dir2
-                rm2 = self.env._r(loc - norm(dir2)*trajg1/norm(trajg1), mpos)  #dir2
                                     
             ind = (te-self.start_t+self.start)*self.sample_freq
             if self.conv_amp: 

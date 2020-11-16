@@ -621,15 +621,19 @@ class PointSourceDipole ( PointSource ):
         yield out[:i]
 
 
-class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
+class MovingPointSourceDipole(PointSourceDipole):
     
     # internal identifier
     digest = Property( 
         depends_on = ['mics.digest', 'signal.digest', 'loc', \
-         'env.digest', 'start_t', 'start', 'up', 'direction', 'movement','__class__'], 
+         'env.digest', 'start_t', 'start', 'up', 'direction', '__class__'], 
         )
-        
-
+               
+    #: Reference vector, perpendicular to the x and y-axis of moving source.
+    #: rotation source directivity around this axis
+    rvec = CArray( dtype=float, shape=(3, ), value=array((0, 0, 0)), 
+        desc="reference vector")
+    
     @cached_property
     def _get_digest( self ):
         return digest(self)    
@@ -654,6 +658,24 @@ class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
             j += 1 #iteration count
         return te, rm, Mr, xs
            
+                
+    def get_moving_direction(self,direction,time=0):
+        """
+        function that yields the moving coordinates along the trajectory  
+        """
+
+        trajg1 = array(self.trajectory.location( time, der=1))[:,0][:,newaxis]
+        rflag = (self.rvec == 0).all() #flag translation vs. rotation
+        if rflag:
+            return direction 
+        else:
+            dx = array(trajg1.T) #direction vector (new x-axis)
+            dy = cross(self.rvec, dx) # new y-axis
+            dz = cross(dx, dy) # new z-axis
+            RM = array((dx, dy, dz)).T # rotation matrix
+            RM /= sqrt((RM*RM).sum(0)) # column normalized
+            newdir = dot(RM, direction)
+            return cross(newdir[:,0].T,self.rvec.T).T
 
     def result(self, num=128):
         """
@@ -676,13 +698,10 @@ class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
         
         # direction vector from tuple
         direc = array(self.direction, dtype = float) * 1e-5
-        direc_mag =  sqrt(dot(direc,direc))
-        
+        direc_mag =  sqrt(dot(direc,direc))   
         # normed direction vector
         direc_n = direc / direc_mag
-        
         c = self.env.c
-        
         # distance between monopoles as function of c, sample freq, direction vector
         dist = c / self.sample_freq * direc_mag * 2
         
@@ -701,15 +720,15 @@ class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
             n -= 1
             te, rm, Mr, locs = self.get_emission_time(t,0)                
             t += 1./self.sample_freq
-            
+            #location of the center
             loc = array(self.trajectory.location(te), dtype = float)[:,0][:,newaxis] 
-            trajg1 = array(self.trajectory.location( te, der=1))[:,0][:,newaxis]
-            
-            #movement = Trait('translation','rotation','rotation2',
-            rm1 = self.env._r(loc + dir2, mpos)  #dir2
-            rm2 = self.env._r(loc - dir2, mpos)  #dir2
-                
-                                    
+            #distance of the dipoles from the center
+            diff = self.get_moving_direction(dir2,te)
+ 
+            # elif self.movement == 'rotation':
+            rm1 = self.env._r(loc + diff, mpos) 
+            rm2 = self.env._r(loc - diff, mpos)
+                                   
             ind = (te-self.start_t+self.start)*self.sample_freq
             if self.conv_amp: 
                 rm *= (1-Mr)**2
@@ -726,7 +745,7 @@ class MovingPointSourceDipole(PointSourceDipole,MovingPointSource):
                     i = 0
             except IndexError:
                 break
-        yield out[:i]
+        yield out[:i]        
 
 
 class LineSource( PointSource ):

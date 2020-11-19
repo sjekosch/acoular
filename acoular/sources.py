@@ -621,7 +621,7 @@ class PointSourceDipole ( PointSource ):
         yield out[:i]
 
 
-class MovingPointSourceDipole(PointSourceDipole):
+class MovingPointSourceDipole(PointSourceDipole, MovingPointSource):
     
     # internal identifier
     digest = Property( 

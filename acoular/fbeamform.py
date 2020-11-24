@@ -454,7 +454,13 @@ class BeamformerBase( HasPrivateTraits ):
 #                print("initialize data.")
                 numfreq = self.freq_data.fftfreq().shape[0]# block_size/2 + 1steer_obj
                 group = self.h5f.create_new_group(nodename)
-                self.h5f.create_compressible_array('result',
+                if self.steer.sourcetype == 'Sphericalharmonic':
+                    self.h5f.create_compressible_array('result',
+                                      (numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2),
+                                      self.precision,
+                                      group)
+                else:
+                    self.h5f.create_compressible_array('result',
                                       (numfreq, self.steer.grid.size),
                                       self.precision,
                                       group)

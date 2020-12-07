@@ -141,11 +141,11 @@ class SteeringVector( HasPrivateTraits ):
     
     # internal identifier
     digest = Property( 
-        depends_on = ['steer_type', 'env.digest', 'grid.digest', 'mics.digest', '_ref'])
+        depends_on = ['steer_type', 'env.digest', 'grid.digest', 'mics.digest','sourcetype','lOrder','direction', '_ref'])
     
     # internal identifier, use for inverse methods, excluding steering vector type
     inv_digest = Property( 
-        depends_on = ['env.digest', 'grid.digest', 'mics.digest', '_ref'])
+        depends_on = ['env.digest', 'grid.digest', 'mics.digest','sourcetype','lOrder','direction',  '_ref'])
         
     @property_depends_on('grid.digest, env.digest, _ref')
     def _get_r0 ( self ):

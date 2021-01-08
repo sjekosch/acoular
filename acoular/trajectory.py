@@ -121,3 +121,19 @@ class Trajectory( HasPrivateTraits ):
         for t in arange(t_start, t_end, delta_t):
             yield self.location(t, der)
         
+        
+class CircleTrajectory( Trajectory ):
+    """
+    Describes a circle trajectory from sampled points.
+    
+    Based on a discrete number of points in space and time, a 
+    continuous trajectory is calculated using spline interpolation 
+    of positions between samples.
+    """
+    
+    
+    
+    
+    
+
+

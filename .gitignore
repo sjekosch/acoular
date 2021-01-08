@@ -25,3 +25,5 @@ __pycache__/
 docs/source/api_ref/generated/
 
 acoular/demo/three_sources.h5
+
+\.vscode/

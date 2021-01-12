@@ -9,13 +9,14 @@
     :toctree: generated/
 
     Trajectory
+    CircleTrajectory
 """
 
 # imports from other packages
-from numpy import array, arange, sort, r_
+from numpy import array, arange, sort, r_ ,float64, pi,cos,sin,append
 from scipy.interpolate import splprep, splev
-from traits.api import HasPrivateTraits, Float, \
-Property, cached_property, property_depends_on, Dict, Tuple
+from traits.api import HasPrivateTraits, Float, Int, \
+Property, cached_property, property_depends_on, Dict, Tuple ,CArray
 
 # acoular imports
 from .internal import digest
@@ -131,6 +132,61 @@ class CircleTrajectory( Trajectory ):
     of positions between samples.
     """
     
+    points = Property()
+    
+    points_ = Dict(key_trait = Float, value_trait = Tuple(Float, Float, Float), 
+        desc = "sampled positions along the trajectory")
+    
+    #: rpm of the source on the circle"
+    rpm = Float(0,
+        desc = "rpm of the source on the circle")
+    
+    #: center of rotation
+    origin = CArray( dtype=float64, shape=(3, ), value=array((0., 0., 0.)), 
+        desc="center of rotation")
+    
+    
+    #: distance of the source from the center of rotation
+    radius = Float(0,
+        desc = "distance of the source from the center of rotation")
+    
+    #: distance of the source from the center of rotation
+    start_angle = Float(0,
+        desc = "Angle of the source at the start of the trajectory")
+    
+    points_per_revolution = Int(16,
+        desc = "distance of the source from the center of rotation")
+    
+    rotation_time = Float(1,
+        desc = "Time of the roatation in s")
+    
+    #: Tuple of the start and end time, is set automatically 
+    #: (depending on :attr:`points`).
+    interval = Property()
+    #t_min, t_max tuple
+    
+    # internal identifier
+    digest = Property( 
+        depends_on = ['rpm','radius','origin','start_angle','points_per_revolution','rotation_time'], 
+        )
+
+    @cached_property
+    def _get_digest( self ):
+        return digest(self)
+    
+
+    @property_depends_on(['rpm','radius','origin','start_angle','points_per_revolution','rotation_time'])
+    def _get_points( self ):
+        pnts = {}
+        for t in arange (0 , self.rotation_time*1.001 , 1./ abs(self.rpm/60 )/self.points_per_revolution):
+            phi = t *  self.rpm/60 * 2 * pi # angle
+            pnts[t] = ( self.radius * cos( phi + self.start_angle )+self.origin[0],\
+                         self.radius  * sin ( phi + self.start_angle )+self.origin[1]  , self.origin[2] )
+
+        return pnts
+    
+    def _set_points( self, pointdict ):
+        self._points= pointdict
     
     
     

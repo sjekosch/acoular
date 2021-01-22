@@ -80,7 +80,7 @@ WriteWAV, WriteH5, SpatialInterpolator, SpatialInterpolatorRotation, Trigger, \
 SampleSplitter, AngleTracker, SpatialInterpolatorConstantRotation, Filter, \
 TimeExpAverage, FiltFreqWeight, TimeCumAverage, FilterBank, OctaveFilterBank
 from .calib import Calib
-from .trajectory import Trajectory
+from .trajectory import Trajectory,CircleTrajectory
 from .grids import Grid, RectGrid, RectGrid3D, Sector,RectSector,CircSector,\
     PolySector, MultiSector
 from .environments import cartToCyl, cylToCart, Environment, UniformFlowEnvironment, RotatingFlow, \

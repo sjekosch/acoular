@@ -38,7 +38,8 @@ invert, dot, newaxis, zeros, empty, fft, float32, float64, complex64, linalg, \
 where, searchsorted, pi, multiply, sign, diag, arange, sqrt, exp, log10, int,\
 reshape, hstack, vstack, eye, tril, size, clip, tile, round, delete, \
 absolute, argsort, sort, sum, hsplit, fill_diagonal, zeros_like, isclose, \
-vdot, flatnonzero, einsum, ndarray, isscalar, inf
+vdot, flatnonzero, einsum, ndarray, isscalar, inf, complex128, arctan2 ,mod, sin ,cos,\
+tile,concatenate
 
 from sklearn.linear_model import LassoLars, LassoLarsCV, LassoLarsIC,\
 OrthogonalMatchingPursuit, ElasticNet, OrthogonalMatchingPursuitCV, Lasso
@@ -49,11 +50,13 @@ from warnings import warn
 
 from traits.api import HasPrivateTraits, Float, Int, ListInt, ListFloat, \
 CArray, Property, Instance, Trait, Bool, Range, Delegate, Enum, Any, \
-cached_property, on_trait_change, property_depends_on
+cached_property, on_trait_change, property_depends_on, Tuple
 from traits.trait_errors import TraitError
 
 from .fastFuncs import beamformerFreq, calcTransfer, calcPointSpreadFunction, \
 damasSolverGaussSeidel
+
+
 
 from .h5cache import H5cache
 from .h5files import H5CacheFileBase
@@ -63,6 +66,7 @@ from .microphones import MicGeom
 from .configuration import config
 from .environments import Environment
 from .spectra import PowerSpectra
+from .tools import get_radiation_angles ,get_modes
 
 class SteeringVector( HasPrivateTraits ):
     """ 
@@ -137,11 +141,11 @@ class SteeringVector( HasPrivateTraits ):
     
     # internal identifier
     digest = Property( 
-        depends_on = ['steer_type', 'env.digest', 'grid.digest', 'mics.digest', '_ref'])
+        depends_on = ['steer_type', 'env.digest', 'grid.digest', 'mics.digest','sourcetype','lOrder','direction', '_ref'])
     
     # internal identifier, use for inverse methods, excluding steering vector type
     inv_digest = Property( 
-        depends_on = ['env.digest', 'grid.digest', 'mics.digest', '_ref'])
+        depends_on = ['env.digest', 'grid.digest', 'mics.digest','sourcetype','lOrder','direction',  '_ref'])
         
     @property_depends_on('grid.digest, env.digest, _ref')
     def _get_r0 ( self ):
@@ -161,6 +165,51 @@ class SteeringVector( HasPrivateTraits ):
     @cached_property
     def _get_inv_digest( self ):
         return digest( self )
+    
+    #: Type of source
+    sourcetype = Trait('Monopole', 'Sphericalharmonic',
+        desc="type of source used in transfer function")
+    
+    #: Order of spherical harmonic source
+    lOrder = Int(0,
+                   desc ="Order of spherical harmonic")
+    #: Vector to define the orientation of the SphericalHarmonic. 
+    direction = Tuple((1.0, 0.0, 0.0),
+        desc="Spherical Harmonic orientation")
+    
+
+    def SphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
+        nPoints = distGridToAllMics.shape[0]
+        for cntPoint in range(nPoints):
+            expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
+            #the radiation pattern
+            Y_mni = get_modes(lOrder = self.lOrder, direction= self.direction,\
+                              mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
+            #result[cntMics] = Y_mn * tile(self.spherical_hn1(self.lOrder,expArg)*distGridToArrayCenter[0] / distGridToAllMics[cntMics],((self.lOrder+1)**2,1)).T
+            result[cntPoint] = Y_mni * tile((cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint],((self.lOrder+1)**2,1)).T
+        return result
+    
+    def calcSphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
+        """ Calculates the Spherical Harmonic transfer functions between the various mics and gridpoints.
+        
+        Parameters
+        ----------
+        distGridToArrayCenter : float64[nGridpoints]
+            Distance of all gridpoints to the center of sensor array
+        distGridToAllMics : float64[nGridpoints, nMics]
+            Distance of all gridpoints to all sensors of array
+        waveNumber : complex128
+            The wave number should be stored in the imag-part
+    
+        Returns
+        -------
+        The Transferfunctions in format complex128[nGridPoints, nMics, (lOrder+1)**2].
+        """
+        nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
+        result = zeros((nGridPoints, nMics,(self.lOrder+1)**2), complex128)
+        #### transfer routine: parallelized over Gridpoints
+        self.SphericalHarmonicTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
+        return result    
     
     def transfer(self, f, ind=None):
         """
@@ -183,14 +232,23 @@ class SteeringVector( HasPrivateTraits ):
         #if self.cached:
         #    warn('Caching of transfer function is not yet supported!', Warning)
         #    self.cached = False
-        
-        if ind is None:
-            trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
-        elif not isinstance(ind,ndarray):
-            trans = calcTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
-        else:
-            trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
-        return trans
+        if  self.sourcetype =='Sphericalharmonic':
+            if ind is None:
+                trans = self.calcSphericalHarmonicTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+            elif not isinstance(ind,ndarray):
+                trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+            else:
+                trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+            return trans
+        else :  #assume Monopol Transfer
+            if ind is None:
+                trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+            elif not isinstance(ind,ndarray):
+                trans = calcTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+            else:
+                trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+            return trans
+      
     
     def steer_vector(self, f, ind=None):
         """
@@ -218,7 +276,8 @@ class SteeringVector( HasPrivateTraits ):
                 }[self.steer_type]
         return func(self.transfer(f, ind))
     
-    
+ 
+
 class BeamformerBase( HasPrivateTraits ):
     """
     Beamforming using the basic delay-and-sum algorithm in the frequency domain.
@@ -395,7 +454,13 @@ class BeamformerBase( HasPrivateTraits ):
 #                print("initialize data.")
                 numfreq = self.freq_data.fftfreq().shape[0]# block_size/2 + 1steer_obj
                 group = self.h5f.create_new_group(nodename)
-                self.h5f.create_compressible_array('result',
+                if self.steer.sourcetype == 'Sphericalharmonic':
+                    self.h5f.create_compressible_array('result',
+                                      (numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2),
+                                      self.precision,
+                                      group)
+                else:
+                    self.h5f.create_compressible_array('result',
                                       (numfreq, self.steer.grid.size),
                                       self.precision,
                                       group)
@@ -442,12 +507,18 @@ class BeamformerBase( HasPrivateTraits ):
 #                        print("cached results are complete! return.")
                 else:
 #                    print("no caching, calculate result")
-                    ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
+                    if self.steer.sourcetype == 'Sphericalharmonic':
+                        ac = zeros((numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2), dtype=self.precision)
+                    else:
+                        ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
                     fr = zeros(numfreq, dtype='int8')
                     self.calc(ac,fr)
             else:
 #                print("no caching activated, calculate result")
-                ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
+                if self.steer.sourcetype == 'Sphericalharmonic':
+                    ac = zeros((numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2), dtype=self.precision)
+                else:
+                    ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
                 fr = zeros(numfreq, dtype='int8')
                 self.calc(ac,fr)
         return ac
@@ -610,8 +681,13 @@ class BeamformerBase( HasPrivateTraits ):
                          'for all queried frequencies. Check '
                          'freq_data.ind_low and freq_data.ind_high!',
                           Warning, stacklevel = 2)
-        return h.reshape(self.steer.grid.shape)
-
+        
+        if self.steer.sourcetype == 'Sphericalharmonic':
+            return h.reshape([self.steer.grid.size,(self.steer.lOrder+1)**2])               
+        else:
+            return h.reshape(self.steer.grid.shape)
+                                   
+        
 
     def integrate(self, sector):
         """
@@ -1743,8 +1819,7 @@ class BeamformerCMF ( BeamformerBase ):
     #: defaults to 500
     max_iter = Int(500, 
         desc="maximum number of iterations")
-
-    
+  
     #: Unit multiplier for evaluating, e.g., nPa instead of Pa. 
     #: Values are converted back before returning. 
     #: Temporary conversion may be necessary to not reach machine epsilon
@@ -1761,6 +1836,7 @@ class BeamformerCMF ( BeamformerBase ):
     def _get_digest( self ):
         return digest( self )
    
+    
 
     def calc(self, ac, fr):
         """
@@ -1804,36 +1880,61 @@ class BeamformerCMF ( BeamformerBase ):
             if not fr[i]:
                 csm = array(self.freq_data.csm[i], dtype='complex128',copy=1)
 
-                h = self.steer.transfer(f[i]).T
-                
-                # reduced Kronecker product (only where solution matrix != 0)
-                Bc = ( h[:,:,newaxis] * \
+                if self.steer.sourcetype == 'Monopole': 
+                    h = self.steer.transfer(f[i]).T
+                    # reduced Kronecker product (only where solution matrix != 0)
+                    Bc = ( h[:,:,newaxis] * \
                        h.conjugate().T[newaxis,:,:] )\
                          .transpose(2,0,1)
-                Ac = Bc.reshape(nc*nc,numpoints)
+                    Ac = Bc.reshape(nc*nc,numpoints)
                 
-                # get indices for upper triangular matrices (use tril b/c transposed)
-                ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
-                
-                ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
-                if self.r_diag:
+                    # get indices for upper triangular matrices (use tril b/c transposed)
+                    ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
+                    ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
+                    if self.r_diag:
                     # omit main diagonal for noise reduction
-                    ind_reim = hstack([ind_im0, ind_im0])
-                else:
+                        ind_reim = hstack([ind_im0, ind_im0])
+                    else:
                     # take all real parts -- also main diagonal
-                    ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
-                    ind_reim[0]=True # TODO: warum hier extra definiert??
+                        ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
+                        ind_reim[0]=True # TODO: warum hier extra definiert??
 #                    if sigma2:
 #                        # identity matrix, needed when noise term sigma is used
 #                        I  = eye(nc).reshape(nc*nc,1)                
 #                        A = realify( hstack([Ac, I])[ind,:] )[ind_reim,:]
 #                        # ... ac[i] = model.coef_[:-1]
 #                    else:
+                    A = realify( Ac [ind,:] )[ind_reim,:]
+                    
+                elif self.steer.sourcetype == 'Sphericalharmonic': 
+                    # transfer for each source type
+                    h = self.steer.transfer(f[i]).T                    
+                    Ai =  zeros((h.shape[0],nc*nc, numpoints))
+                    for i in range(h.shape[0]):
+                        Bc = ( h[i,:,:,newaxis] * \
+                              h[i].conjugate().T[newaxis,:,:] )\
+                                .transpose(2,0,1)
+                        Ac = Bc.reshape(nc*nc,numpoints)
+                        # get indices for upper triangular matrices (use tril b/c transposed)
+                        ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
+                        ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
+                        if self.r_diag:
+                            # omit main diagonal for noise reduction
+                            ind_reim = hstack([ind_im0, ind_im0])
+                        else:
+                            # take all real parts -- also main diagonal
+                            ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
+                            ind_reim[0]=True # TODO: warum hier extra definiert??
+                        
+                        Ai[i] = realify( Ac [ind,:] )[ind_reim,:]
+                    #extend matrix to multiple source types
+                    A = Ai.transpose(1,2,0).flatten().reshape(nc*nc, numpoints*h.shape[0])
 
-                A = realify( Ac [ind,:] )[ind_reim,:]
+                        
                 # use csm.T for column stacking reshape!
                 R = realify( reshape(csm.T, (nc*nc,1))[ind,:] )[ind_reim,:] * unit
                 # choose method
+                                
                 if self.method == 'LassoLars':
                     model = LassoLars(alpha = self.alpha * unit,
                                       max_iter = self.max_iter)
@@ -1874,8 +1975,11 @@ class BeamformerCMF ( BeamformerBase ):
                     model.fit(A,R[:,0])
                     ac[i] = model.coef_[:] / unit
                 fr[i] = 1
+     
         
-                
+        
+
+
                 
                 
 class BeamformerGIB(BeamformerEig):  #BeamformerEig #BeamformerBase

@@ -27,6 +27,7 @@
 from numpy import mgrid, s_, array, arange, isscalar, absolute, ones, argmin,\
 zeros, where,  asfarray,concatenate,sum,ma,ones_like,inf,copysign,fabs ,append,\
 tile,newaxis
+
 from numpy.linalg import norm
 from traits.api import HasPrivateTraits, Float, Property, Any, \
 property_depends_on, cached_property, Bool, List, Instance, File ,on_trait_change,\
@@ -947,6 +948,10 @@ class MergeGrid( Grid ):
             bpos = append(bpos,grid.gpos, axis = 1)
             #subgrids = append(subgrids,str(grid))
         return bpos
+
+
+
+
 
 class Sector( HasPrivateTraits ):
     """

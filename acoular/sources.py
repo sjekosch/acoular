@@ -946,8 +946,13 @@ class MovingLineSource(LineSource,MovingPointSource):
     #: movement for every monopole    
     #: translation is a line source in direction which end moves along the trajectory
     #: rotation is a rotation around the direction vector, perpendicular to the trajectory   
-    movement = Trait('translation','rotation',
-        desc="kind of movement")
+    #movement = Trait('translation','rotation',
+    #    desc="kind of movement")
+
+    #: Reference vector, perpendicular to the x and y-axis of moving source.
+    #: rotation source directivity around this axis
+    rvec = CArray( dtype=float, shape=(3, ), value=array((0, 0, 0)), 
+        desc="reference vector")
     
     @cached_property
     def _get_digest( self ):

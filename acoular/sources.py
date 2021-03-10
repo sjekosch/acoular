@@ -25,11 +25,9 @@
 
 from numpy import array, sqrt, ones, empty, newaxis, uint32, arange, dot, int64 ,real, pi,\
 tile, cross ,zeros
+
 from numpy.fft import ifft, fft
 from numpy.linalg import norm
-
-from numpy import array, sqrt, ones, empty, newaxis, uint32, arange, dot, int64 ,zeros,\
-tile, cross
 
 from traits.api import Float, Int, Property, Trait, Delegate, \
 cached_property, Tuple, CLong, File, Instance, Any, \
@@ -431,7 +429,7 @@ class PointSource( SamplesGenerator ):
                 ind += 1.
                 i += 1
                 if i == num:
-                    yield out
+                    yield out.copy()
                     i = 0
             except IndexError: #if no more samples available from the source
                 break
@@ -439,6 +437,78 @@ class PointSource( SamplesGenerator ):
             yield out[:i]         
 
 
+class SphericalHarmonicSource( PointSource ):
+    """
+    Class to define a fixed Spherical Harmonic Source with an arbitrary signal.
+    This can be used in simulations.
+    
+    The output is being generated via the :meth:`result` generator.
+    """
+    
+    #: Order of spherical harmonic source
+    lOrder = Int(0,
+                   desc ="Order of spherical harmonic")
+    
+    alpha = CArray(desc="coefficients of the (lOrder,) spherical harmonic mode")
+    
+    
+    #: Vector to define the orientation of the SphericalHarmonic. 
+    direction = Tuple((1.0, 0.0, 0.0),
+        desc="Spherical Harmonic orientation")
+    
+    # internal identifier
+    digest = Property( 
+        depends_on = ['mics.digest', 'signal.digest', 'loc', \
+         'env.digest', 'start_t', 'start', 'up', '__class__', 'alpha','lOrder'], 
+        )
+               
+    @cached_property
+    def _get_digest( self ):
+        return digest(self)
+
+    def transform(self,signals):
+        Y_lm = get_modes(lOrder = self.lOrder, direction= self.direction, mpos = self.mics.mpos,sourceposition = array(self.loc))
+        return real(ifft(fft(signals,axis=0) * (Y_lm @ self.alpha),axis=0))
+
+    def result(self, num=128):
+        """
+        Python generator that yields the output at microphones block-wise.
+                
+        Parameters
+        ----------
+        num : integer, defaults to 128
+            This parameter defines the size of the blocks to be yielded
+            (i.e. the number of samples per block) .
+        
+        Returns
+        -------
+        Samples in blocks of shape (num, numchannels). 
+            The last block may be shorter than num.
+        """
+        #If signal samples are needed for te < t_start, then samples are taken
+        #from the end of the calculated signal.
+        
+        signal = self.signal.usignal(self.up)
+        # emission time relative to start_t (in samples) for first sample
+        rm = self.env._r(array(self.loc).reshape((3, 1)), self.mics.mpos)
+        ind = (-rm/self.env.c-self.start_t+self.start)*self.sample_freq   + pi/30 
+        i = 0
+        n = self.numsamples
+        out = empty((num, self.numchannels))
+        while n:
+            n -= 1
+            try:
+                out[i] = signal[array(0.5+ind*self.up, dtype=int64)]/rm
+                ind += 1
+                i += 1
+                if i == num:
+                    yield self.transform(out)
+                    i = 0
+            except IndexError: #if no more samples available from the source
+                break
+        if i > 0: # if there are still samples to yield
+            yield self.transform(out[:i])
+            
 class MovingPointSource( PointSource ):
     """
     Class to define a point source with an arbitrary 
@@ -520,7 +590,7 @@ class MovingPointSource( PointSource ):
                 out[i] = signal[array(0.5+ind*self.up, dtype=int64)]/rm
                 i += 1
                 if i == num:
-                    yield out
+                    yield out.copy()
                     i = 0
             except IndexError: #if no more samples available from the source 
                 break
@@ -621,7 +691,7 @@ class PointSourceDipole ( PointSource ):
                 
                 i += 1
                 if i == num:
-                    yield out
+                    yield out.copy()
                     i = 0
             except IndexError:
                 break
@@ -754,78 +824,6 @@ class MovingPointSourceDipole(PointSourceDipole, MovingPointSource):
                 break
         yield out[:i]        
 
-
-class SphericalHarmonicSource( PointSource ):
-    """
-    Class to define a fixed Spherical Harmonic Source with an arbitrary signal.
-    This can be used in simulations.
-    
-    The output is being generated via the :meth:`result` generator.
-    """
-    
-    #: Order of spherical harmonic source
-    lOrder = Int(0,
-                   desc ="Order of spherical harmonic")
-    
-    alpha = CArray(desc="coefficients of the (lOrder,) spherical harmonic mode")
-    
-    
-    #: Vector to define the orientation of the SphericalHarmonic. 
-    direction = Tuple((1.0, 0.0, 0.0),
-        desc="Spherical Harmonic orientation")
-    
-    # internal identifier
-    digest = Property( 
-        depends_on = ['mics.digest', 'signal.digest', 'loc', \
-         'env.digest', 'start_t', 'start', 'up', '__class__', 'alpha','lOrder'], 
-        )
-               
-    @cached_property
-    def _get_digest( self ):
-        return digest(self)
-
-    def transform(self,signals):
-        Y_lm = get_modes(lOrder = self.lOrder, direction= self.direction, mpos = self.mics.mpos,sourceposition = array(self.loc))
-        return real(ifft(fft(signals,axis=0) * (Y_lm @ self.alpha),axis=0))
-
-    def result(self, num=128):
-        """
-        Python generator that yields the output at microphones block-wise.
-                
-        Parameters
-        ----------
-        num : integer, defaults to 128
-            This parameter defines the size of the blocks to be yielded
-            (i.e. the number of samples per block) .
-        
-        Returns
-        -------
-        Samples in blocks of shape (num, numchannels). 
-            The last block may be shorter than num.
-        """
-        #If signal samples are needed for te < t_start, then samples are taken
-        #from the end of the calculated signal.
-        
-        signal = self.signal.usignal(self.up)
-        # emission time relative to start_t (in samples) for first sample
-        rm = self.env._r(array(self.loc).reshape((3, 1)), self.mics.mpos)
-        ind = (-rm/self.env.c-self.start_t+self.start)*self.sample_freq   + pi/30 
-        i = 0
-        n = self.numsamples
-        out = empty((num, self.numchannels))
-        while n:
-            n -= 1
-            try:
-                out[i] = signal[array(0.5+ind*self.up, dtype=int64)]/rm
-                ind += 1
-                i += 1
-                if i == num:
-                    yield self.transform(out)
-                    i = 0
-            except IndexError: #if no more samples available from the source
-                break
-        if i > 0: # if there are still samples to yield
-            yield self.transform(out[:i])
 
 
 class LineSource( PointSource ):
@@ -1206,7 +1204,7 @@ class SourceMixer( SamplesGenerator ):
     ldigest = Property( depends_on = ['sources.digest', ])
 
     # internal identifier
-    digest = Property( depends_on = ['ldigest', '__class__'])
+    digest = Property( depends_on = ['ldigest', '__class__','sources'])
 
     @cached_property
     def _get_ldigest( self ):

@@ -26,6 +26,41 @@ from .spectra import synthetic
 from scipy.special import spherical_yn, spherical_jn, sph_harm
 
 
+def return_result(source, nmax=-1, num=128):
+    """
+    Collects the output from a 
+    :meth:`SamplesGenerator.result()<acoular.tprocess.SamplesGenerator.result>`
+    generator and returns an assembled array with all the data.
+   
+    Parameters
+    ----------
+    source: SamplesGenerator or derived object.
+        This is the  :class:`SamplesGenerator<acoular.tprocess.SamplesGenerator>` data source.
+    nmax: integer
+        With this parameter, a maximum number of output samples can be set 
+        (first dimension of array). If set to -1 (default), samples are 
+        collected as long as the generator yields them.
+    num : integer
+        This parameter defines the size of the blocks that are fetched.
+        Defaults to 128.
+          
+    Returns
+    -------
+    array of floats (number of samples, source.numchannels)
+        Array that holds all the data.
+    """
+    resulter = (_.copy() for _ in source.result(num))
+    
+    if nmax > 0: 
+        nblocks = (nmax-1) // num + 1
+        return concatenate( 
+                      list( res for _, res in 
+                            zip(range(nblocks), 
+                                resulter) ) )[:nmax]
+    else:
+        return concatenate(list(resulter))
+
+
 def spherical_hn1(n,z,derivativearccos=False):
    """ Spherical Hankel Function of the First Kind 
    
@@ -103,40 +138,6 @@ def get_modes(lOrder, direction, mpos , sourceposition = array([0,0,0])):
                 modes[:, i]=modes[:, i].conj()*1j             
             i += 1
     return modes
-
-def return_result(source, nmax=-1, num=128):
-    """
-    Collects the output from a 
-    :meth:`SamplesGenerator.result()<acoular.tprocess.SamplesGenerator.result>`
-    generator and returns an assembled array with all the data.
-   
-    Parameters
-    ----------
-    source: SamplesGenerator or derived object.
-        This is the  :class:`SamplesGenerator<acoular.tprocess.SamplesGenerator>` data source.
-    nmax: integer
-        With this parameter, a maximum number of output samples can be set 
-        (first dimension of array). If set to -1 (default), samples are 
-        collected as long as the generator yields them.
-    num : integer
-        This parameter defines the size of the blocks that are fetched.
-        Defaults to 128.
-          
-    Returns
-    -------
-    array of floats (number of samples, source.numchannels)
-        Array that holds all the data.
-    """
-    if nmax > 0: 
-        nblocks = (nmax-1) // num + 1
-        return concatenate( 
-                      list( res for _, res in 
-                            zip(range(nblocks), 
-                                source.result(num)) ) )[:nmax]
-    else:
-        return concatenate(list(source.result(num)))
-
-
 
 def barspectrum(data, fftfreqs, num = 3, bar = True, xoffset = 0.0):
     """

@@ -802,7 +802,7 @@ class MovingPointSourceDipole(PointSourceDipole, MovingPointSource):
             #distance of the dipoles from the center
             diff = self.get_moving_direction(dir2,te)
  
-            # elif self.movement == 'rotation':
+            # distance of sources
             rm1 = self.env._r(loc + diff, mpos) 
             rm2 = self.env._r(loc - diff, mpos)
                                    
@@ -941,11 +941,6 @@ class MovingLineSource(LineSource,MovingPointSource):
          'env.digest', 'start_t', 'start', 'up', 'direction', '__class__'], 
         )
         
-    #: movement for every monopole    
-    #: translation is a line source in direction which end moves along the trajectory
-    #: rotation is a rotation around the direction vector, perpendicular to the trajectory   
-    #movement = Trait('translation','rotation',
-    #    desc="kind of movement")
 
     #: Reference vector, perpendicular to the x and y-axis of moving source.
     #: rotation source directivity around this axis
@@ -954,7 +949,25 @@ class MovingLineSource(LineSource,MovingPointSource):
     
     @cached_property
     def _get_digest( self ):
-        return digest(self)    
+        return digest(self) 
+    
+    def get_moving_direction(self,direction,time=0):
+        """
+        function that yields the moving coordinates along the trajectory  
+        """
+    
+        trajg1 = array(self.trajectory.location( time, der=1))[:,0][:,newaxis]
+        rflag = (self.rvec == 0).all() #flag translation vs. rotation
+        if rflag:
+            return direction 
+        else:
+            dx = array(trajg1.T) #direction vector (new x-axis)
+            dy = cross(self.rvec, dx) # new y-axis
+            dz = cross(dx, dy) # new z-axis
+            RM = array((dx, dy, dz)).T # rotation matrix
+            RM /= sqrt((RM*RM).sum(0)) # column normalized
+            newdir = dot(RM, direction)
+            return cross(newdir[:,0].T,self.rvec.T).T
 
     def get_emission_time(self,t,direction):
         eps = ones(self.mics.num_mics)
@@ -1003,6 +1016,7 @@ class MovingLineSource(LineSource,MovingPointSource):
         
         # distance between monopoles in the line 
         dist = self.length / self.num_sources 
+        dir2 = (direc_n * dist).reshape((3, 1))
         
         #blocwise output
         out = zeros((num, self.numchannels))
@@ -1029,24 +1043,16 @@ class MovingLineSource(LineSource,MovingPointSource):
             n -= 1                         
             t += 1./self.sample_freq
             te1, rm1, Mr1, locs1 = self.get_emission_time(t,0)         
-            trajg1 = array(self.trajectory.location( te1, der=1))[:,0][:,newaxis]
+            #trajg1 = array(self.trajectory.location( te1, der=1))[:,0][:,newaxis]
             
             # get distance and ind for every source in the line
             for s in range(self.num_sources):
-                if self.movement == 'translation':
-                    te, rm, Mr, locs = self.get_emission_time(t,tile((direc_n*dist*s).T,(self.numchannels,1)).T)   #tile(direction,(self.numchannels,1)).T
-                    loc = array(self.trajectory.location(te), dtype = float)[:,0][:,newaxis] 
-                    trajg1 = array(self.trajectory.location( te, der=1))[:,0][:,newaxis]
-                    rms[:,s] = self.env._r((loc.T+direc_n*dist*s).T, mpos)
-                    inds[:,s] = (te-self.start_t+self.start)*self.sample_freq
-                elif self.movement == 'rotation':   
-                    trajg1 = array(self.trajectory.location( te1, der=1))[:,0][:,newaxis]
-                    te, rm, Mr, locs = self.get_emission_time(t,tile(cross((direc_n*dist*s).T,(trajg1/norm(trajg1)).T),(self.numchannels,1)).T)   
-                    loc = array(self.trajectory.location(te), dtype = float)[:,0][:,newaxis] 
-                    trajg1 = array(self.trajectory.location( te, der=1))[:,0][:,newaxis]
-                    rms[:,s] = self.env._r(loc + cross((direc_n*dist*s).T,(trajg1/norm(trajg1)).T).T, mpos)  
-                    inds[:,s] = (te-self.start_t+self.start)*self.sample_freq
-                #inds[:,s] = (-rms[:,s]  / c - self.start_t + self.start) * self.sample_freq             
+                diff = self.get_moving_direction(dir2,te1)
+                te, rm, Mr, locs = self.get_emission_time(t,tile((diff*s).T,(self.numchannels,1)).T)
+                loc = array(self.trajectory.location(te), dtype = float)[:,0][:,newaxis] 
+                diff = self.get_moving_direction(dir2,te)
+                rms[:,s] = self.env._r((loc+diff*s), mpos)
+                inds[:,s] = (te-self.start_t+self.start)*self.sample_freq      
             
             if self.conv_amp: 
                 rm *= (1-Mr)**2

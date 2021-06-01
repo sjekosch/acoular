@@ -33,13 +33,14 @@
     WriteWAV
     WriteH5
     SampleSplitter
+    TimeConvolve
 """
 
 # imports from other packages
 from numpy import array, empty, empty_like, pi, sin, sqrt, zeros, newaxis, unique, \
 int16, nan, concatenate, sum, float64, identity, argsort, interp, arange, append, \
 linspace, flatnonzero, argmin, argmax, delete, mean, inf, asarray, stack, sinc, exp, \
-polymul, arange, cumsum
+polymul, arange, cumsum, ceil, split
 
 from numpy.matlib import repmat
 
@@ -48,7 +49,10 @@ from scipy.interpolate import LinearNDInterpolator,splrep, splev, \
 CloughTocher2DInterpolator, CubicSpline, Rbf
 from traits.api import HasPrivateTraits, Float, Int, CLong, Bool, ListInt, \
 Constant, File, Property, Instance, Trait, Delegate, \
-cached_property, on_trait_change, List, CArray, Dict
+cached_property, on_trait_change, List, CArray, Dict, PrefixMap, Callable
+
+from scipy.fft import rfft, irfft
+import numba as nb
 
 from datetime import datetime
 from os import path
@@ -61,7 +65,7 @@ import threading
 
 # acoular imports
 from .internal import digest
-from .h5cache import H5cache, td_dir
+from .h5cache import H5cache
 from .h5files import H5CacheFileBase, _get_h5file_class
 from .environments import cartToCyl,cylToCart
 from .microphones import MicGeom
@@ -249,22 +253,38 @@ class MaskedTimeInOut ( TimeInOut ):
             raise IOError("no samples available")
         
         if start != 0 or stop != self.numsamples_total:
-
-            stopoff = -stop % num
             offset = -start % num
-            if offset == 0: offset = num      
-            buf = empty((num + offset , self.numchannels), dtype=float) # buffer array
+            if offset == 0: offset = num
+            buf = empty((num + offset , self.numchannels), dtype=float)
+            bsize = 0
             i = 0
+            fblock = True
             for block in self.source.result(num):
-                i += num
-                if i > start and i <= stop+stopoff:
-                    ns = block.shape[0] # numbers of samples
-                    buf[offset:offset+ns] = block[:, self.channels]
-                    if i > start + num:
+                bs = block.shape[0]
+                i += bs
+                if fblock and i >= start : # first block in the chosen interval
+                    if i>= stop: # special case that start and stop are in one block
+                        yield block[bs-(i-start):bs-(i-stop),self.channels]
+                        break
+                    bsize += (i-start)
+                    buf[:(i-start),:] = block[bs-(i-start):,self.channels]
+                    fblock = False
+                elif i >= stop: # last block
+                    buf[bsize:bsize+bs-(i-stop),:] = block[:bs-(i-stop),self.channels]
+                    bsize += bs-(i-stop)
+                    if bsize >num:
                         yield buf[:num]
-                    buf[:offset] = buf[num:num+offset]
-            if offset-stopoff != 0:
-                yield buf[:(offset-stopoff)]
+                        buf[:bsize-num,:] = buf[num:bsize,:]
+                        bsize -= num
+                    yield buf[:bsize,:]
+                    break
+                elif i >=start :
+                    buf[bsize:bsize+bs,:] = block[:,self.channels]
+                    bsize += bs
+                if bsize>=num:
+                    yield buf[:num]
+                    buf[:bsize-num,:] = buf[num:bsize,:]
+                    bsize -= num
         
         else: # if no start/stop given, don't do the resorting thing
             for block in self.source.result(num):
@@ -969,7 +989,7 @@ class SpatialInterpolator(TimeInOut):
             #check rotation
             if not phiDelay == []:
                 xInterpHelp = repmat(virtNewCoord[0, :], nTime, 1) + repmat(phiDelay, virtNewCoord.shape[1], 1).T
-                xInterp = ((xInterpHelp) % (2 * pi)) - pi #shifting phi cootrdinate into feasible area [-pi, pi]
+                xInterp = ((xInterpHelp + pi ) % (2 * pi)) - pi #shifting phi cootrdinate into feasible area [-pi, pi]
             else:
                 xInterp = repmat(virtNewCoord[0, :], nTime, 1)  
                 
@@ -1029,7 +1049,7 @@ class SpatialInterpolator(TimeInOut):
             #check rotation
             if not phiDelay == []:
                 xInterpHelp = repmat(virtNewCoord[0, :], nTime, 1) + repmat(phiDelay, virtNewCoord.shape[1], 1).T
-                xInterp = ((xInterpHelp ) % (2 * pi)) - pi  #shifting phi cootrdinate into feasible area [-pi, pi]
+                xInterp = ((xInterpHelp + pi  ) % (2 * pi)) - pi  #shifting phi cootrdinate into feasible area [-pi, pi]
             else:
                 xInterp = repmat(virtNewCoord[0, :], nTime, 1)  
                 
@@ -1935,7 +1955,7 @@ class WriteH5( TimeInOut ):
     def create_filename(self):
         if self.name == '':
             name = datetime.now().isoformat('_').replace(':','-').replace('.','_')
-            self.name = path.join(td_dir,name+'.h5')
+            self.name = path.join(config.td_dir,name+'.h5')
 
     def get_initialized_file(self):
         file = _get_h5file_class()
@@ -2164,4 +2184,144 @@ class SampleSplitter(TimeInOut):
                     return
         else: 
             raise IOError('Maximum size of block buffer is reached!')   
+
         
+class TimeConvolve(TimeInOut):
+    """
+    Uniformly partitioned overlap-save method (UPOLS) for fast convolution in the frequency domain, see :ref:`Wefers, 2015<Wefers2015>`.
+    """
+
+    #: Convolution kernel in the time domain.
+    #: The second dimension of the kernel array has to be either 1 or match :attr:`~SamplesGenerator.numchannels`.
+    #: If only a single kernel is supplied, it is applied to all channels.
+    kernel = CArray(dtype=float, desc="Convolution kernel.")
+
+    _block_size = Int(desc="Block size")
+
+    _kernel_blocks = Property(
+        depends_on=["kernel", "_block_size"],
+        desc="Frequency domain Kernel blocks",
+    )
+
+    # internal identifier
+    digest = Property( depends_on = ['source.digest', 'kernel', '__class__'])
+
+    @cached_property
+    def _get_digest( self ):
+        return digest(self)
+
+    def _validate_kernel(self):
+        # reshape kernel for broadcasting
+        if self.kernel.ndim == 1:
+            self.kernel = self.kernel.reshape([-1, 1])
+            return
+        # check dimensionality
+        elif self.kernel.ndim > 2:
+            raise ValueError("Only one or two dimensional kernels accepted.")
+
+        # check if number of kernels matches numchannels
+        if self.kernel.shape[1] not in (1, self.source.numchannels):
+            raise ValueError("Number of kernels must be either `numchannels` or one.")
+
+    # compute the rfft of the kernel blockwise
+    @cached_property
+    def _get__kernel_blocks(self):
+        [L, N] = self.kernel.shape
+        num = self._block_size
+        P = int(ceil(L / num))
+        trim = num * (P - 1)
+        blocks = zeros([P, num + 1, N], dtype="complex128")
+
+        if P > 1:
+            for i, block in enumerate(split(self.kernel[:trim], P - 1, axis=0)):
+                blocks[i] = rfft(concatenate([block, zeros([num, N])], axis=0),axis=0)
+
+        blocks[-1] = rfft(
+            concatenate([self.kernel[trim:], zeros([2 * num - L + trim, N])], axis=0),axis=0
+        )
+        return blocks
+
+    
+    def result(self, num=128):
+        """
+        Python generator that yields the output block-wise.
+        The source output is convolved with the kernel.
+
+        Parameters
+        ----------
+        num : integer
+            This parameter defines the size of the blocks to be yielded
+            (i.e. the number of samples per block).
+
+        Returns
+        -------
+        Samples in blocks of shape (num, numchannels).
+            The last block may be shorter than num.
+        """
+
+        self._validate_kernel()
+        # initialize variables
+        self._block_size = num
+        L = self.kernel.shape[0]
+        N = self.source.numchannels
+        M = self.source.numsamples
+        P = int(ceil(L / num))  # number of kernel blocks
+        Q = int(ceil(M / num))  # number of signal blocks
+        R = int(ceil((L + M - 1) / num))  # number of output blocks
+        last_size = (L + M - 1) % num # size of final block
+
+        idx = 0
+        FDL = zeros([P, num + 1, N], dtype="complex128")
+        buff = zeros([2 * num, N])  # time-domain input buffer
+        spec_sum = zeros([num+1,N],dtype="complex128")
+
+        signal_blocks = self.source.result(num)
+        temp = next(signal_blocks)
+        buff[num : num + temp.shape[0]] = temp # append new time-data
+
+        # for very short signals, we are already done
+        if R == 1:
+            _append_to_FDL(FDL, idx, P, rfft(buff,axis=0))
+            spec_sum = _spectral_sum(spec_sum, FDL, self._kernel_blocks) 
+            # truncate s.t. total length is L+M-1 (like numpy convolve w/ mode="full")
+            yield irfft(spec_sum,axis=0)[num: last_size + num]
+            return
+
+        # stream processing of source signal
+        for temp in signal_blocks:
+            _append_to_FDL(FDL, idx, P, rfft(buff,axis=0))
+            spec_sum = _spectral_sum(spec_sum, FDL, self._kernel_blocks )
+            yield irfft(spec_sum,axis=0)[num:]
+            buff = concatenate(
+                [buff[num:], zeros([num, N])], axis=0
+            )  # shift input buffer to the left
+            buff[num : num + temp.shape[0]] = temp # append new time-data
+
+        for _ in range(R-Q):
+            _append_to_FDL(FDL, idx, P, rfft(buff,axis=0))
+            spec_sum = _spectral_sum(spec_sum, FDL, self._kernel_blocks )
+            yield irfft(spec_sum,axis=0)[num:]
+            buff = concatenate(
+                [buff[num:], zeros([num, N])], axis=0
+            )  # shift input buffer to the left
+
+        _append_to_FDL(FDL, idx, P, rfft(buff,axis=0))
+        spec_sum = _spectral_sum(spec_sum, FDL, self._kernel_blocks )
+        # truncate s.t. total length is L+M-1 (like numpy convolve w/ mode="full")
+        yield irfft(spec_sum, axis=0)[num: last_size + num]
+
+@nb.jit(nopython=True, cache=True)
+def _append_to_FDL(FDL,idx,P,buff):
+    FDL[idx] = buff
+    idx = int(idx +1 % P)
+
+@nb.jit(nopython=True, cache=True)
+def _spectral_sum(out,FDL,KB):
+    P,B,N = KB.shape
+    for n in range(N):
+        for b in range(B):
+            out[b,n] = 0
+            for i in range(P):
+                out[b,n] += FDL[i,b,n]*KB[i,b,n]
+
+    return out

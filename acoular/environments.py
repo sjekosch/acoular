@@ -420,7 +420,7 @@ class RotatingFlow( FlowField ):
 
 
     """
-    #: Exit velocity at jet origin, i.e. the nozzle. Defaults to 0.
+    #: velocity at origin, . Defaults to 0.
     rpm = Float(0.0,
         desc="revolutions per minute of the virtual array; negative values for clockwise rotation")
 

@@ -140,7 +140,7 @@ class CircleTrajectory( Trajectory ):
     points_ = Dict(key_trait = Float, value_trait = Tuple(Float, Float, Float), 
         desc = "sampled positions along the trajectory")
     
-    #: rpm of the source on the circle"
+    #: rpm of the source on the circle
     rpm = Float(0,
         desc = "rpm of the source on the circle")
     

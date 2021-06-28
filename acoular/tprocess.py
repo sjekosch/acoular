@@ -1151,10 +1151,14 @@ class SpatialInterpolatorConstantRotation(SpatialInterpolator):
     Gets samples from :attr:`source` and generates output via the 
     generator :meth:`result`
     """
+    #: rpm of the virtual rotating array
+    rpm = Float(0.0)
+
     #: Rotational speed in rps. Positive, if rotation is around positive z-axis sense,
     #: which means from x to y axis.
-    rotational_speed = Float(0.0)
-    
+    _rotational_speed = Float(0.0)
+
+
     # internal identifier
     digest = Property( depends_on = ['source.digest','mics.digest', \
                                      'mics_virtual.digest','method','array_dimension', \
@@ -1163,6 +1167,9 @@ class SpatialInterpolatorConstantRotation(SpatialInterpolator):
     @cached_property
     def _get_digest( self ):
         return digest(self)
+
+    def _get_rotational_speed( self ):
+        return self.rpm/60
     
     
     def result(self, num=1):

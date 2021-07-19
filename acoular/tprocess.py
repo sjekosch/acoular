@@ -1156,7 +1156,7 @@ class SpatialInterpolatorConstantRotation(SpatialInterpolator):
 
     #: Rotational speed in rps. Positive, if rotation is around positive z-axis sense,
     #: which means from x to y axis.
-    _rotational_speed = Float(0.0)
+    _rotational_speed = Property()
 
 
     # internal identifier
@@ -1168,7 +1168,7 @@ class SpatialInterpolatorConstantRotation(SpatialInterpolator):
     def _get_digest( self ):
         return digest(self)
 
-    def _get_rotational_speed( self ):
+    def _get__rotational_speed( self ):
         return self.rpm/60
     
     
@@ -1187,7 +1187,7 @@ class SpatialInterpolatorConstantRotation(SpatialInterpolator):
         Samples in blocks of shape (num, :attr:`numchannels`). 
             The last block may be shorter than num.
         """
-        omega = 2 * pi * self.rotational_speed
+        omega = 2 * pi * self._rotational_speed
         period = 2 * pi
         phiOffset = 0.0
         for timeData in self.source.result(num):

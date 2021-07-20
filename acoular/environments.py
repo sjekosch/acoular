@@ -18,6 +18,8 @@
 
 """
 import numba as nb
+import numpy as np
+
 from numpy import array, isscalar, float32, float64, newaxis, zeros, \
 sqrt, arange, pi, exp, sin, cos, arccos, zeros_like, empty, dot, hstack, \
 vstack, identity, cross, sign, arctan2, matmul, sum, lexsort, stack, nonzero, append, outer, asarray
@@ -26,7 +28,7 @@ from scipy.integrate import ode
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import ConvexHull
 from traits.api import HasPrivateTraits, Float, Property, Int, \
-CArray, cached_property, Trait
+CArray, cached_property, Trait, File, Instance
 
 from .internal import digest
 
@@ -482,6 +484,153 @@ class RotatingFlow( FlowField ):
         return v, dv
 
 
+
+
+class FanFlow( FlowField ):
+    """
+    Provides an analytical approximation of a non-uniform flow field with a stable flow velocity. 
+    Take the fan flow as an example.
+    
+    
+    """
+    data= File()
+    
+    origin = CArray(dtype=float64, shape=(3, ), value=array((0., 0., 0.)), 
+        desc="center of microphone")
+    
+    digest = Property(
+        depends_on=['data'])
+    
+    caculate = Property(
+        depends_on=['data'])
+            
+    @cached_property
+    def _get_digest( self ):
+        return digest( self )
+    
+    @cached_property
+    def _get_caculate(self):
+        """
+        Calculates velocity and velocity gradient array from the given data, 
+        and do the interpolation
+        
+        
+        """
+        phase = np.load(self.data)
+        location = phase[0]
+        velocity = phase[1]
+        
+        ###reshape u,v,w to 3d
+        x = np.unique(location[:,0])
+        y = np.unique(location[:,1])
+        z = np.unique(location[:,2])
+        
+        xl = len(x)
+        yl = len(y)
+        zl = len(z)
+        
+        u_3d = np.reshape(velocity[:,0], (xl,yl,zl))
+        v_3d = np.reshape(velocity[:,1], (xl,yl,zl))
+        w_3d = np.reshape(velocity[:,2], (xl,yl,zl))
+        
+        ###u,v,w gradient for x,y,z
+        u_gradx = np.gradient(u_3d, axis=0)
+        u_grady = np.gradient(u_3d, axis=1)
+        u_gradz = np.gradient(u_3d, axis=2)
+        v_gradx = np.gradient(v_3d, axis=0)
+        v_grady = np.gradient(v_3d, axis=1)
+        v_gradz = np.gradient(v_3d, axis=2)
+        w_gradx = np.gradient(w_3d, axis=0)
+        w_grady = np.gradient(w_3d, axis=1)
+        w_gradz = np.gradient(w_3d, axis=2)
+        
+        ###interpolator for 3D velocity
+        velocity_interp = LinearNDInterpolator(location, velocity, fill_value=0)
+        
+        ###interpolator for u,v,w gradient
+        u_grad = np.array([u_gradx.flatten(), u_grady.flatten(), u_gradz.flatten()]).T
+        v_grad = np.array([v_gradx.flatten(), v_grady.flatten(), v_gradz.flatten()]).T
+        w_grad = np.array([w_gradx.flatten(), w_grady.flatten(), w_gradz.flatten()]).T
+        
+        u_grad_interp = LinearNDInterpolator(location, u_grad, fill_value=0)
+        v_grad_interp = LinearNDInterpolator(location, v_grad, fill_value=0)
+        w_grad_interp = LinearNDInterpolator(location, w_grad, fill_value=0)
+        return velocity_interp, u_grad_interp, v_grad_interp, w_grad_interp
+                 
+    def v( self, xx):
+        """
+        Provides the continuous uneven flow field along the z-Axis as a function of the location.
+
+        Parameters
+        ----------
+        xx : array of floats of shape (3, )
+            Location in the fluid for which to provide the data.
+
+        Returns
+        -------
+        tuple with two elements
+            The first element in the tuple is the velocity vector and the
+            second is the Jacobian of the velocity vector field, both at the
+            given location.
+        """
+        caculate = self.caculate
+        vi = caculate[0]
+        ug = caculate[1]
+        vg = caculate[2]
+        wg = caculate[3]
+        
+        ###flow field
+        v = vi(xx)
+        
+        ###Jacobi matrix
+        dv = array( (ug(xx), vg(xx), wg(xx)) )
+        return np.squeeze(v),np.squeeze(dv)
+
+
+
+
+class JointFlow( FlowField ):
+    """
+    Provides an analytical approximation of the joint flow field of any two flow fields.
+    For example: the fan flow field and the rotating flow field, 
+    which could have the same flow field as the virtual rotating microphone array
+    
+    
+    """
+    ff1 = Instance(FlowField, 
+        desc="flow field 1")
+    
+    ff2 = Instance(FlowField, 
+        desc="flow field 2")
+    
+    digest = Property(
+        depends_on=['ff1', 'ff2'])
+        
+    @cached_property
+    def _get_digest( self ):
+        return digest( self )
+       
+    def v( self, xx):
+        """
+        Provides the joint flow field of any two FlowField as a function of the location.
+
+        Parameters
+        ----------
+        xx : array of floats of shape (3, )
+            Location in the fluid for which to provide the data.
+
+        Returns
+        -------
+        tuple with two elements
+            The first element in the tuple is the velocity vector and the
+            second is the Jacobian of the velocity vector field, both at the
+            given location.
+        
+        
+        """
+        v = self.ff1.v(xx)[0] + self.ff2.v(xx)[0]
+        dv = self.ff1.v(xx)[1] + self.ff2.v(xx)[1]
+        return v,dv
 
 
 def spiral_sphere(N, Om=2*pi, b=array((0, 0, 1))):    #change to 4*pi

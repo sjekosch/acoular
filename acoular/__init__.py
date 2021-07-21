@@ -83,7 +83,7 @@ from .trajectory import Trajectory
 from .grids import Grid, RectGrid, RectGrid3D, Sector,RectSector,CircSector,\
     PolySector, MultiSector, MergeGrid, LineGrid, ImportGrid, ConvexSector
 from .environments import cartToCyl, cylToCart, Environment, UniformFlowEnvironment, RotatingFlow, \
-FlowField, OpenJet, SlotJet, GeneralFlowEnvironment
+FlowField, OpenJet, SlotJet, GeneralFlowEnvironment, JointFlow, FanFlow
 from .microphones import MicGeom
 from .spectra import PowerSpectra, PowerSpectra as EigSpectra, synthetic
 

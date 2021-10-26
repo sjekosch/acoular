@@ -281,10 +281,13 @@ class SteeringVector( HasPrivateTraits ):
     
 
 
-class SteeringVectorGrid( SteeringVector ):
+class SteeringVectorLineSource( SteeringVector ):
     """ 
     Basic class for implementing steering vectors with monopole source transfer models
     """
+
+    line_source = Any(array([[[0.,0.,0.],[0.,0.,0.]]]),
+               desc="Vector containing the grid points of each line source")
     
     #: :class:`~acoular.grids.Grid`-derived object that provides the grid locations.
     grid = Trait(Grid, 
@@ -298,6 +301,9 @@ class SteeringVectorGrid( SteeringVector ):
     steer_type = Trait('true level', 'true location', 'classic', 'inverse',
                   desc="type of steering vectors used")
     
+        #: Type of source
+    sourcetype = Trait('LineSource', 'Sphericalharmonic',
+        desc="type of source used in transfer function")
 
     # Sound travel distances from microphone array center to grid 
     # points or reference position (readonly). Feature may change.
@@ -366,16 +372,22 @@ class SteeringVectorGrid( SteeringVector ):
     def _get_inv_digest( self ):
         return digest( self )
     
-    def SourceGridTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
-        nPoints = distGridToAllMics.shape[0]
-        for cntPoint in range(nPoints):
-            expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
-            result[cntPoint] = (cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint]
+    def LineSourceTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
+        #nPoints = distGridToAllMics.shape[0]
+        
+        for line in range(len(self.line_source[:,0,0])):
+                for point in range(len(self.line_source[line,:,0])):
+                    pointresult = zeros((len(self.line_source[:,0]), distGridToAllMics.shape[1]), complex128) 
+                    cntPoint = self.line_source[line,point]
+                    expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
+                    pointresult[cntPoint] = (cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint]
+
+                result[line] = sum(pointresult[cntPoint])
         return result
 
     
-    def calcGridTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
-        """ Calculates the Spherical Harmonic transfer functions between the various mics and gridpoints.
+    def calcLineSourceTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
+        """ Calculates the linesource transfer functions between the various mics and gridpoints.
         
         Parameters
         ----------
@@ -391,7 +403,7 @@ class SteeringVectorGrid( SteeringVector ):
         The Transferfunctions in format complex128[nGridPoints, nMics, (lOrder+1)**2].
         """
         nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
-        result = zeros((nGridPoints, nMics), complex128)
+        result = zeros((len(self.line_source[:,0,0]), nMics), complex128)
         #### transfer routine: parallelized over Gridpoints
         self.LineSourceTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
         return result    
@@ -419,11 +431,11 @@ class SteeringVectorGrid( SteeringVector ):
         #    self.cached = False
         if  self.sourcetype =='LineSource':
             if ind is None:
-                trans = self.calcGridTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+                trans = self.calcLineSourceTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
             elif not isinstance(ind,ndarray):
-                trans = self.calcGridTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+                trans = self.calcLineSourceTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
             else:
-                trans = self.calcGridTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+                trans = self.calcLineSourceTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
             return trans
 
     
@@ -2055,7 +2067,7 @@ class BeamformerCMF ( BeamformerBase ):
             if not fr[i]:
                 csm = array(self.freq_data.csm[i], dtype='complex128',copy=1)
 
-                if self.steer.sourcetype == 'Monopole': 
+                if self.steer.sourcetype == 'Monopole' or self.steer.sourcetype == 'LineSource': 
                     h = self.steer.transfer(f[i]).T
                     # reduced Kronecker product (only where solution matrix != 0)
                     Bc = ( h[:,:,newaxis] * \
@@ -2436,7 +2448,7 @@ class BeamformerSODIX( BeamformerBase ):
                     qi = ones([numpoints,num_mics])
                     qi, yval, dicts =  fmin_l_bfgs_b(function, D0, fprime=None, args=(),  #None  
                                                          approx_grad=0, bounds=boundarys, #approx_grad 0 or True
-                                                         factr=100.0, pgtol=1e-09, epsilon=1e-08,
+                                                         factr=100.0, pgtol=1e-09, epsilon=1e-08, #
                                                           iprint=0, maxfun=1500000, maxiter=self.max_iter,
                                                           disp=None, callback=None, maxls=20)
                     #squared pressure

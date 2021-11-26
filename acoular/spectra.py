@@ -64,7 +64,7 @@ class PowerSpectra( HasPrivateTraits ):
 
     #: FFT block size, one of: 128, 256, 512, 1024, 2048 ... 65536,
     #: defaults to 1024.
-    block_size = Trait(1024, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
+    block_size = Int(1024,
         desc="number of samples per FFT block")
 
     # Shadow trait, should not be set directly, for internal use.

@@ -291,6 +291,41 @@ class MaskedTimeInOut ( TimeInOut ):
                 yield block[:, self.channels]
 
 
+class MaskedIntervallInOut( MaskedTimeInOut ):
+    
+    intervalls  = List()
+       
+    #: Name of the cache file without extension, readonly.
+    basename = Property( depends_on = 'source.digest', 
+        desc="basename for cache file")
+
+    # internal identifier
+    digest = Property( depends_on = ['source.digest', 'start', 'stop', \
+        'invalid_channels','intervalls'])
+    
+    def result(self, num):    #data (numsamples, numchannels)
+        """ 
+        Python generator: dummy function, just echoes the output of source,
+        yields samples in blocks of shape (num, :attr:`numchannels`), the last block
+        may be shorter than num.
+        """
+        for temp in self.source.result(num):
+            
+            #check if temp is in intervall
+            #for i in self.intervalls:
+                
+                #if 
+                #self.source.data
+                
+            
+            #processing
+            
+            
+            yield temp
+
+
+
+
 class ChannelMixer( TimeInOut ):
     """
     Class for directly mixing the channels of a multi-channel source. 
@@ -1189,7 +1224,150 @@ class SpatialInterpolatorConstantRotation(SpatialInterpolator):
             interpVal = self._result_core_func(timeData, phiDelay, period, self.Q, interp_at_zero = False)
             phiOffset = phiDelay[-1] + omega / self.sample_freq
             yield interpVal    
-      
+
+
+class SpatialInterpolatorMaskedRotation(SpatialInterpolator):
+    #: Index of the first sample to be considered valid.
+    start = CLong(None,
+                  desc="start of valid samples")
+
+    #: Index of the last sample to be considered valid.
+    stop = CLong(None,
+              desc="stop of valid samples")
+
+    count = CLong(0,
+              desc="counter to track angle position in time for each block")
+    #: Angle data from AngleTracker class
+    angle_source = Instance(AngleTracker)
+    
+    digest = Property(depends_on=['source.digest', 'angle_source.digest', \
+                                  'mics.digest', 'mics_virtual.digest', \
+                                  'method', 'array_dimension', 'Q', 'interp_at_zero'])
+
+    @cached_property
+    def _get_digest(self):
+        return digest(self)
+
+    def result(self, num=128):
+        """
+        Python generator that yields the output block-wise.
+
+        Parameters
+        ----------
+        num : integer
+            This parameter defines the size of the blocks to be yielded
+            (i.e. the number of samples per block).
+
+        Returns
+        -------
+        XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        """
+        #print("SpatIntMaskedRot result")
+        self.count=0
+
+
+        sli = slice(self.start, self.stop).indices(self.numsamples)
+        start = sli[0]
+        stop = sli[1]
+
+        # period for rotation
+        period = 2 * pi
+        # get angle
+        angle = self.angle_source._get_angle() # ggf in __init__ verschieben?
+
+
+        if start >= stop:
+            raise IOError("no samples available")
+
+        if start >= stop:
+            raise IOError("no samples available")
+
+        if start != 0 or stop != self.numsamples:
+
+
+            stopoff = -stop % num
+            offset = -start % num
+            if offset == 0: offset = num
+            buf = empty((num + offset, self.numchannels), dtype=float)  # buffer array
+            i = 0
+
+            phiDelay = angle[start:start+num]
+            #num = phiDelay.shape[0]
+
+            for block in self.source.maskedResult(num, start, stop):
+                if i == 0:
+                    #print(f"tprocess SIMR: block.size={block.shape}, blockType={type(block)}")
+                    interpVal = self._result_core_func(block, phiDelay, period, self.Q, interp_at_zero=False)
+                    yield interpVal
+
+class SpatialInterpolatorSameDegreeIntervalls(SpatialInterpolator):
+    """
+    Wird benutzt, um Arrays wie [[1,10], [100,110],[200,210]] in "einem Rutsch" auszugeben
+    :author: Sören
+    """
+
+    #: Angle data from AngleTracker class
+    angle_source = Instance(AngleTracker)
+    
+    
+    digest = Property(depends_on=['source.digest', 'angle_source.digest', \
+                                  'mics.digest', 'mics_virtual.digest', \
+                                  'method', 'array_dimension', 'Q', 'interp_at_zero'])
+        
+    angle_Array = List(desc = "List in the Format [[start1,end1],[s2,e2],[s3,e3]]")
+
+    @cached_property
+    def _get_digest(self):
+        return digest(self)
+
+    def result(self, num=128):
+        """
+        Python generator that yields the output block-wise.
+
+        Parameters
+        ----------
+        num : integer
+            This parameter defines the size of the blocks to be yielded
+            (i.e. the number of samples per block).
+
+        Returns
+        -------
+        Blockwise _result_core_func of the givenAngle Array
+        """
+        for  a in self.angle_Array: # angle_Array ~= [[start1,end1],[s2,e2],[s3,e3], ...]
+
+
+            sli = slice(a[0], a[1]).indices(self.numsamples)
+            start = sli[0]
+            stop = sli[1]
+
+            # period for rotation
+            period = 2 * pi
+            # get angle
+            angle = self.angle_source._get_angle() # ggf in __init__ verschieben?
+
+
+            if start >= stop:
+                raise IOError("no samples available")
+
+
+            if start != 0 or stop != self.numsamples:
+
+                stopoff = -stop % num
+                offset = -start % num
+                if offset == 0: offset = num
+                buf = empty((num + offset, self.numchannels), dtype=float)  # buffer array
+                i = 0
+
+                phiDelay = angle[start:stop]
+                num = phiDelay.shape[0]
+
+                for block in self.source.maskedResult(num, start, stop):
+                    if i == 0:
+                        #print(f"tprocess SIMR: block.size={block.shape}, blockType={type(block)}")
+                        interpVal = self._result_core_func(block, phiDelay, period, self.Q, interp_at_zero=False)
+                        yield interpVal
+    
     
 class Mixer( TimeInOut ):
     """

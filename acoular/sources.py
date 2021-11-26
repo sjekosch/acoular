@@ -329,6 +329,30 @@ class MaskedTimeSamples( TimeSamples ):
         while i < stop:
             yield self.data[i:min(i+num, stop)][:, self.channels]*cal_factor
             i += num
+            
+    def maskedResult(self, num, start, stop):
+    #print("masked Result")
+        if self.numsamples == 0:
+            raise IOError("no samples available")
+        self._datachecksum  # trigger checksum calculation
+        i = start
+        if self.calib:
+            if self.calib.num_mics == self.numchannels:
+                cal_factor = self.calib.data[newaxis]
+            else:
+                raise ValueError("calibration data not compatible: %i, %i" % \
+                                 (self.calib.num_mics, self.numchannels))
+            while i < self.numsamples:
+                yield self.data[i:i + num] * cal_factor
+                i += num
+        else:
+            while i < stop:
+                if i+num > stop:
+                    yield self.data[i:stop] # a=[0,1,2,3,4] a[1:4]=[1,2,3] -> 4 nicht mehr drin, trotzdem okay?!
+                else:
+                    yield self.data[i:i + num]
+                i += num + 1   # stimmt das +1???
+                #i += num # am 27.10 statt +1 ersetzt
 
 
 class PointSource( SamplesGenerator ):

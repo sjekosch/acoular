@@ -9,7 +9,8 @@
     :toctree: generated/
     
     SteeringVector
-
+    SteeringVectorDipole
+    SteeringVectorMultipole
     
     BeamformerBase
     BeamformerFunctional
@@ -171,16 +172,130 @@ class SteeringVector( HasPrivateTraits ):
     
     #: Type of source
     sourcetype = Trait('Monopole', 'Sphericalharmonic',
-        desc="type of source used in transfer function")
+        desc="type of source used in transfer function")   
+    
+    def transfer(self, f, ind=None):
+        """
+        Calculates the transfer matrix for one frequency. 
+        
+        Parameters
+        ----------
+        f   : float
+            Frequency for which to calculate the transfer matrix
+        ind : (optional) array of ints
+            If set, only the transfer function of the gridpoints addressed by 
+            the given indices will be calculated. Useful for algorithms like CLEAN-SC,
+            where not the full transfer matrix is needed
+        
+        Returns
+        -------
+        array of complex128
+            array of shape (ngridpts, nmics) containing the transfer matrix for the given frequency
+        """
+        #if self.cached:
+        #    warn('Caching of transfer function is not yet supported!', Warning)
+        #    self.cached = False
+
+        if ind is None:
+            trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+        elif not isinstance(ind,ndarray):
+            trans = calcTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+        else:
+            trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+        return trans
+
+    
+    def steer_vector(self, f, ind=None):
+        """
+        Calculates the steering vectors based on the transfer function
+        See also :ref:`Sarradj, 2012<Sarradj2012>`.
+        
+        Parameters
+        ----------
+        f   : float
+            Frequency for which to calculate the transfer matrix
+        ind : (optional) array of ints
+            If set, only the steering vectors of the gridpoints addressed by 
+            the given indices will be calculated. Useful for algorithms like CLEAN-SC,
+            where not the full transfer matrix is needed
+        
+        Returns
+        -------
+        array of complex128
+            array of shape (ngridpts, nmics) containing the steering vectors for the given frequency
+        """
+        func = {'classic' : lambda x: x / absolute(x) / x.shape[-1],
+                'inverse' : lambda x: 1. / x.conj() / x.shape[-1],
+                'true level' : lambda x: x / einsum('ij,ij->i',x,x.conj())[:,newaxis],
+                'true location' : lambda x: x / sqrt(einsum('ij,ij->i',x,x.conj()) * x.shape[-1])[:,newaxis]
+                }[self.steer_type]
+        return func(self.transfer(f, ind))
+    
+
+class SteeringVectorDipole( SteeringVector ):
+    """ 
+    Class for implementing steering vectors with dipole source transfer models
+    WIP!
+    """
+
+    #: Vector to define the orientation of the dipole. 
+    direction = Tuple((1.0, 0.0, 0.0),
+        desc="Spherical Harmonic orientation")
+    
+    def DipoleTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
+        nPoints = distGridToAllMics.shape[0]
+        for cntPoint in range(nPoints):
+            expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
+            #the radiation pattern
+            dipole_dir = get_modes(lOrder = self.lOrder, direction= self.direction,\
+                              mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
+            result[cntPoint] = dipole_dir * tile((cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint],((self.lOrder+1)**2,1)).T
+        return result
+    
+    def calcDipoleTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
+        """ Calculates the Spherical Harmonic transfer functions between the various mics and gridpoints.
+        
+        Parameters
+        ----------
+        distGridToArrayCenter : float64[nGridpoints]
+            Distance of all gridpoints to the center of sensor array
+        distGridToAllMics : float64[nGridpoints, nMics]
+            Distance of all gridpoints to all sensors of array
+        waveNumber : complex128
+            The wave number should be stored in the imag-part
+    
+        Returns
+        -------
+        The Transferfunctions in format complex128[nGridPoints, nMics, (lOrder+1)**2].
+        """
+        nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
+        result = zeros((nGridPoints, nMics, 3), complex128)
+        #### transfer routine: parallelized over Gridpoints
+        self.DipoleTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
+        return result   
+
+
+class SteeringVectorMultipole( SteeringVector ):
+    """ 
+    Class for implementing steering vectors with multipole source transfer models
+    """
+    
+    # internal identifier
+    digest = Property( 
+        depends_on = ['steer_type', 'env.digest', 'grid.digest', 'mics.digest', '_ref','lOrder', ' direction'])
+    
+    # internal identifier, use for inverse methods, excluding steering vector type
+    inv_digest = Property( 
+        depends_on = ['env.digest', 'grid.digest', 'mics.digest', '_ref','lOrder', ' direction'])
     
     #: Order of spherical harmonic source
     lOrder = Int(0,
                    desc ="Order of spherical harmonic")
+
     #: Vector to define the orientation of the SphericalHarmonic. 
     direction = Tuple((1.0, 0.0, 0.0),
         desc="Spherical Harmonic orientation")
     
-
     def SphericalHarmonicTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
         nPoints = distGridToAllMics.shape[0]
         for cntPoint in range(nPoints):
@@ -188,7 +303,6 @@ class SteeringVector( HasPrivateTraits ):
             #the radiation pattern
             Y_mni = get_modes(lOrder = self.lOrder, direction= self.direction,\
                               mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
-            #result[cntMics] = Y_mn * tile(self.spherical_hn1(self.lOrder,expArg)*distGridToArrayCenter[0] / distGridToAllMics[cntMics],((self.lOrder+1)**2,1)).T
             result[cntPoint] = Y_mni * tile((cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint],((self.lOrder+1)**2,1)).T
         return result
     
@@ -213,7 +327,8 @@ class SteeringVector( HasPrivateTraits ):
         #### transfer routine: parallelized over Gridpoints
         self.SphericalHarmonicTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
         return result    
-    
+
+
     def transfer(self, f, ind=None):
         """
         Calculates the transfer matrix for one frequency. 
@@ -243,227 +358,10 @@ class SteeringVector( HasPrivateTraits ):
             else:
                 trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
             return trans
-        else :  #assume Monopol Transfer
-            if ind is None:
-                trans = calcTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
-            elif not isinstance(ind,ndarray):
-                trans = calcTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
-            else:
-                trans = calcTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
-            return trans
-
-    
-    def steer_vector(self, f, ind=None):
-        """
-        Calculates the steering vectors based on the transfer function
-        See also :ref:`Sarradj, 2012<Sarradj2012>`.
         
-        Parameters
-        ----------
-        f   : float
-            Frequency for which to calculate the transfer matrix
-        ind : (optional) array of ints
-            If set, only the steering vectors of the gridpoints addressed by 
-            the given indices will be calculated. Useful for algorithms like CLEAN-SC,
-            where not the full transfer matrix is needed
-        
-        Returns
-        -------
-        array of complex128
-            array of shape (ngridpts, nmics) containing the steering vectors for the given frequency
-        """
-        func = {'classic' : lambda x: x / absolute(x) / x.shape[-1],
-                'inverse' : lambda x: 1. / x.conj() / x.shape[-1],
-                'true level' : lambda x: x / einsum('ij,ij->i',x,x.conj())[:,newaxis],
-                'true location' : lambda x: x / sqrt(einsum('ij,ij->i',x,x.conj()) * x.shape[-1])[:,newaxis]
-                }[self.steer_type]
-        return func(self.transfer(f, ind))
-    
 
-
-class SteeringVectorLineSource( SteeringVector ):
-    """ 
-    Basic class for implementing steering vectors with monopole source transfer models
-    """
-
-    line_source = Any(array([[[0.,0.,0.],[0.,0.,0.]]]),
-               desc="Vector containing the grid points of each line source")
     
-    #: :class:`~acoular.grids.Grid`-derived object that provides the grid locations.
-    grid = Trait(Grid, 
-        desc="beamforming grid")
-    
-    #: :class:`~acoular.microphones.MicGeom` object that provides the microphone locations.
-    mics = Trait(MicGeom, 
-        desc="microphone geometry")
-        
-    #: Type of steering vectors, see also :ref:`Sarradj, 2012<Sarradj2012>`. Defaults to 'true level'.
-    steer_type = Trait('true level', 'true location', 'classic', 'inverse',
-                  desc="type of steering vectors used")
-    
-        #: Type of source
-    sourcetype = Trait('LineSource', 'Sphericalharmonic',
-        desc="type of source used in transfer function")
-
-    # Sound travel distances from microphone array center to grid 
-    # points or reference position (readonly). Feature may change.
-    r0 = Property(desc="array center to grid distances")
-
-    # Sound travel distances from array microphones to grid 
-    # points (readonly). Feature may change.
-    rm = Property(desc="all array mics to grid distances")
-    
-    # mirror trait for ref
-    _ref = Any(array([0.,0.,0.]),
-               desc="reference position or distance")
-    
-    #: Reference position or distance at which to evaluate the sound pressure 
-    #: of a grid point. 
-    #: If set to a scalar, this is used as reference distance to the grid points.
-    #: If set to a vector, this is interpreted as x,y,z coordinates of the reference position.
-    #: Defaults to [0.,0.,0.].
-    ref = Property(desc="reference position or distance")
-    
-    def _set_ref (self, ref):
-        if isscalar(ref):
-            try:
-                self._ref = absolute(float(ref))
-            except:
-                raise TraitError(args=self,
-                                 name='ref', 
-                                 info='Float or CArray(3,)',
-                                 value=ref) 
-        elif len(ref) == 3:
-            self._ref = array(ref, dtype=float)
-        else:
-            raise TraitError(args=self,
-                             name='ref', 
-                             info='Float or CArray(3,)',
-                             value=ref)
-      
-    def _get_ref (self):
-        return self._ref
-    
-    
-    # internal identifier
-    digest = Property( 
-        depends_on = ['steer_type', 'env.digest', 'grid.digest', 'mics.digest', '_ref'])
-    
-    # internal identifier, use for inverse methods, excluding steering vector type
-    inv_digest = Property( 
-        depends_on = ['env.digest', 'grid.digest', 'mics.digest', '_ref'])
-        
-    @property_depends_on('grid.digest, env.digest, _ref')
-    def _get_r0 ( self ):
-        if isscalar(self.ref) and self.ref > 0:
-            return full((self.grid.size,), self.ref)
-        else:
-            return self.env._r(self.grid.pos())
-
-    @property_depends_on('grid.digest, mics.digest, env.digest')
-    def _get_rm ( self ):
-        return self.env._r(self.grid.pos(), self.mics.mpos)
  
-    @cached_property
-    def _get_digest( self ):
-        return digest( self )
-    
-    @cached_property
-    def _get_inv_digest( self ):
-        return digest( self )
-    
-    def LineSourceTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
-        #nPoints = distGridToAllMics.shape[0]
-        
-        for line in range(len(self.line_source[:,0,0])):
-                for point in range(len(self.line_source[line,:,0])):
-                    pointresult = zeros((len(self.line_source[:,0]), distGridToAllMics.shape[1]), complex128) 
-                    cntPoint = self.line_source[line,point]
-                    expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
-                    pointresult[cntPoint] = (cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint]
-
-                result[line] = sum(pointresult[cntPoint])
-        return result
-
-    
-    def calcLineSourceTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
-        """ Calculates the linesource transfer functions between the various mics and gridpoints.
-        
-        Parameters
-        ----------
-        distGridToArrayCenter : float64[nGridpoints]
-            Distance of all gridpoints to the center of sensor array
-        distGridToAllMics : float64[nGridpoints, nMics]
-            Distance of all gridpoints to all sensors of array
-        waveNumber : complex128
-            The wave number should be stored in the imag-part
-    
-        Returns
-        -------
-        The Transferfunctions in format complex128[nGridPoints, nMics, (lOrder+1)**2].
-        """
-        nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
-        result = zeros((len(self.line_source[:,0,0]), nMics), complex128)
-        #### transfer routine: parallelized over Gridpoints
-        self.LineSourceTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
-        return result    
-
-    def transfer(self, f, ind=None):
-        """
-        Calculates the transfer matrix for one frequency. 
-        
-        Parameters
-        ----------
-        f   : float
-            Frequency for which to calculate the transfer matrix
-        ind : (optional) array of ints
-            If set, only the transfer function of the gridpoints addressed by 
-            the given indices will be calculated. Useful for algorithms like CLEAN-SC,
-            where not the full transfer matrix is needed
-        
-        Returns
-        -------
-        array of complex128
-            array of shape (ngridpts, nmics) containing the transfer matrix for the given frequency
-        """
-        #if self.cached:
-        #    warn('Caching of transfer function is not yet supported!', Warning)
-        #    self.cached = False
-        if  self.sourcetype =='LineSource':
-            if ind is None:
-                trans = self.calcLineSourceTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
-            elif not isinstance(ind,ndarray):
-                trans = self.calcLineSourceTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
-            else:
-                trans = self.calcLineSourceTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
-            return trans
-
-    
-    def steer_vector(self, f, ind=None):
-        """
-        Calculates the steering vectors based on the transfer function
-        See also :ref:`Sarradj, 2012<Sarradj2012>`.
-        
-        Parameters
-        ----------
-        f   : float
-            Frequency for which to calculate the transfer matrix
-        ind : (optional) array of ints
-            If set, only the steering vectors of the gridpoints addressed by 
-            the given indices will be calculated. Useful for algorithms like CLEAN-SC,
-            where not the full transfer matrix is needed
-        
-        Returns
-        -------
-        array of complex128
-            array of shape (ngridpts, nmics) containing the steering vectors for the given frequency
-        """
-        func = {'classic' : lambda x: x / absolute(x) / x.shape[-1],
-                'inverse' : lambda x: 1. / x.conj() / x.shape[-1],
-                'true level' : lambda x: x / einsum('ij,ij->i',x,x.conj())[:,newaxis],
-                'true location' : lambda x: x / sqrt(einsum('ij,ij->i',x,x.conj()) * x.shape[-1])[:,newaxis]
-                }[self.steer_type]
-        return func(self.transfer(f, ind))
     
 class BeamformerBase( HasPrivateTraits ):
     """
@@ -2067,7 +1965,30 @@ class BeamformerCMF ( BeamformerBase ):
             if not fr[i]:
                 csm = array(self.freq_data.csm[i], dtype='complex128',copy=1)
 
-                if self.steer.sourcetype == 'Monopole' or self.steer.sourcetype == 'LineSource': 
+                if isinstance(self.steer,SteeringVectorMultipole) or isinstance(self.steer,SteeringVectorDipole):
+                    # transfer for each source type
+                    h = self.steer.transfer(f[i]).T                    
+                    Ai =  zeros((h.shape[0],nc*nc, numpoints))
+                    for i in range(h.shape[0]):
+                        Bc = ( h[i,:,:,newaxis] * \
+                              h[i].conjugate().T[newaxis,:,:] )\
+                                .transpose(2,0,1)
+                        Ac = Bc.reshape(nc*nc,numpoints)
+                        # get indices for upper triangular matrices (use tril b/c transposed)
+                        ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
+                        ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
+                        if self.r_diag:
+                            # omit main diagonal for noise reduction
+                            ind_reim = hstack([ind_im0, ind_im0])
+                        else:
+                            # take all real parts -- also main diagonal
+                            ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
+                            ind_reim[0]=True # TODO: warum hier extra definiert??
+                        
+                        Ai[i] = realify( Ac [ind,:] )[ind_reim,:]
+                    #extend matrix to multiple source types
+                    A = Ai.transpose(1,2,0).flatten().reshape(nc*nc, numpoints*h.shape[0])
+                else:  
                     h = self.steer.transfer(f[i]).T
                     # reduced Kronecker product (only where solution matrix != 0)
                     Bc = ( h[:,:,newaxis] * \
@@ -2092,32 +2013,7 @@ class BeamformerCMF ( BeamformerBase ):
 #                        # ... ac[i] = model.coef_[:-1]
 #                    else:
                     A = realify( Ac [ind,:] )[ind_reim,:]
-                    
-                elif self.steer.sourcetype == 'Sphericalharmonic': 
-                    # transfer for each source type
-                    h = self.steer.transfer(f[i]).T                    
-                    Ai =  zeros((h.shape[0],nc*nc, numpoints))
-                    for i in range(h.shape[0]):
-                        Bc = ( h[i,:,:,newaxis] * \
-                              h[i].conjugate().T[newaxis,:,:] )\
-                                .transpose(2,0,1)
-                        Ac = Bc.reshape(nc*nc,numpoints)
-                        # get indices for upper triangular matrices (use tril b/c transposed)
-                        ind = reshape(tril(ones((nc,nc))), (nc*nc,)) > 0
-                        ind_im0 = (reshape(eye(nc),(nc*nc,)) == 0)[ind]
-                        if self.r_diag:
-                            # omit main diagonal for noise reduction
-                            ind_reim = hstack([ind_im0, ind_im0])
-                        else:
-                            # take all real parts -- also main diagonal
-                            ind_reim = hstack([ones(size(ind_im0),)>0,ind_im0])
-                            ind_reim[0]=True # TODO: warum hier extra definiert??
-                        
-                        Ai[i] = realify( Ac [ind,:] )[ind_reim,:]
-                    #extend matrix to multiple source types
-                    A = Ai.transpose(1,2,0).flatten().reshape(nc*nc, numpoints*h.shape[0])
-
-                        
+                                            
                 # use csm.T for column stacking reshape!
                 R = realify( reshape(csm.T, (nc*nc,1))[ind,:] )[ind_reim,:] * unit
                 # choose method

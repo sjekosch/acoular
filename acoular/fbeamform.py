@@ -170,10 +170,6 @@ class SteeringVector( HasPrivateTraits ):
     def _get_inv_digest( self ):
         return digest( self )
     
-    #: Type of source
-    sourcetype = Trait('Monopole', 'Sphericalharmonic',
-        desc="type of source used in transfer function")   
-    
     def transfer(self, f, ind=None):
         """
         Calculates the transfer matrix for one frequency. 
@@ -248,7 +244,7 @@ class SteeringVectorDipole( SteeringVector ):
             #the radiation pattern
             azi, ele = get_radiation_angles(direction= self.direction,mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
             dipole_dir = cos(ele)
-            result[cntPoint] = (cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint]  * dipole_dir#[cntPoint]
+            result[cntPoint] = (cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint]  * dipole_dir
         return result
     
     def calcDipoleTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
@@ -566,7 +562,7 @@ class BeamformerBase( HasPrivateTraits ):
 #                print("initialize data.")
                 numfreq = self.freq_data.fftfreq().shape[0]# block_size/2 + 1steer_obj
                 group = self.h5f.create_new_group(nodename)
-                if self.steer.sourcetype == 'Sphericalharmonic':
+                if isinstance(self.steer,SteeringVectorMultipole):
                     self.h5f.create_compressible_array('result',
                                       (numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2),
                                       self.precision,
@@ -619,7 +615,7 @@ class BeamformerBase( HasPrivateTraits ):
 #                        print("cached results are complete! return.")
                 else:
 #                    print("no caching, calculate result")
-                    if self.steer.sourcetype == 'Sphericalharmonic':
+                    if isinstance(self.steer,SteeringVectorMultipole):
                         ac = zeros((numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2), dtype=self.precision)
                     else:
                         ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
@@ -627,7 +623,7 @@ class BeamformerBase( HasPrivateTraits ):
                     self.calc(ac,fr)
             else:
 #                print("no caching activated, calculate result")
-                if self.steer.sourcetype == 'Sphericalharmonic':
+                if isinstance(self.steer,SteeringVectorMultipole):
                     ac = zeros((numfreq, self.steer.grid.size*((self.steer.lOrder)+1)**2), dtype=self.precision)
                 else:
                     ac = zeros((numfreq, self.steer.grid.size), dtype=self.precision)
@@ -794,7 +790,7 @@ class BeamformerBase( HasPrivateTraits ):
                          'freq_data.ind_low and freq_data.ind_high!',
                           Warning, stacklevel = 2)
         
-        if self.steer.sourcetype == 'Sphericalharmonic':
+        if isinstance(self.steer,SteeringVectorMultipole):
             return h.reshape([self.steer.grid.size,(self.steer.lOrder+1)**2])               
         else:
             return h.reshape(self.steer.grid.shape)
@@ -2371,7 +2367,7 @@ class BeamformerSODIX( BeamformerBase ):
                     qi = ones([numpoints,num_mics])
                     qi, yval, dicts =  fmin_l_bfgs_b(function, D0, fprime=None, args=(),  #None  
                                                          approx_grad=0, bounds=boundarys, #approx_grad 0 or True
-                                                         factr=100.0, pgtol=1e-09, epsilon=1e-08, #
+                                                         factr=100.0, pgtol=1e-09, epsilon=1e-08,
                                                           iprint=0, maxfun=1500000, maxiter=self.max_iter,
                                                           disp=None, callback=None, maxls=20)
                     #squared pressure

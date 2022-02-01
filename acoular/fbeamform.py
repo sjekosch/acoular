@@ -235,21 +235,20 @@ class SteeringVector( HasPrivateTraits ):
 class SteeringVectorDipole( SteeringVector ):
     """ 
     Class for implementing steering vectors with dipole source transfer models
-    WIP!
     """
 
     #: Vector to define the orientation of the dipole. 
     direction = Tuple((1.0, 0.0, 0.0),
-        desc="Spherical Harmonic orientation")
+        desc="Dipole orientation")
     
     def DipoleTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber, result):
         nPoints = distGridToAllMics.shape[0]
         for cntPoint in range(nPoints):
             expArg = float32(waveNumber[0] * (distGridToAllMics[cntPoint] - distGridToArrayCenter[0]))
             #the radiation pattern
-            dipole_dir = get_modes(lOrder = self.lOrder, direction= self.direction,\
-                              mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
-            result[cntPoint] = dipole_dir * tile((cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint],((self.lOrder+1)**2,1)).T
+            azi, ele = get_radiation_angles(direction= self.direction,mpos = self.mics.mpos,sourceposition = self.grid.pos()[:,cntPoint])
+            dipole_dir = cos(ele)
+            result[cntPoint] = (cos(expArg) - 1j * sin(expArg)) * distGridToArrayCenter[0] / distGridToAllMics[cntPoint]  * dipole_dir#[cntPoint]
         return result
     
     def calcDipoleTransfer(self, distGridToArrayCenter, distGridToAllMics, waveNumber):
@@ -269,11 +268,40 @@ class SteeringVectorDipole( SteeringVector ):
         The Transferfunctions in format complex128[nGridPoints, nMics, (lOrder+1)**2].
         """
         nGridPoints, nMics = distGridToAllMics.shape[0], distGridToAllMics.shape[1]
-        result = zeros((nGridPoints, nMics, 3), complex128)
+        result = zeros((nGridPoints, nMics), complex128) # one dipole
         #### transfer routine: parallelized over Gridpoints
         self.DipoleTransfer(distGridToArrayCenter, distGridToAllMics, array([waveNumber]), result)
         return result   
 
+    def transfer(self, f, ind=None):
+        """
+        Calculates the transfer matrix for one frequency. 
+        
+        Parameters
+        ----------
+        f   : float
+            Frequency for which to calculate the transfer matrix
+        ind : (optional) array of ints
+            If set, only the transfer function of the gridpoints addressed by 
+            the given indices will be calculated. Useful for algorithms like CLEAN-SC,
+            where not the full transfer matrix is needed
+        
+        Returns
+        -------
+        array of complex128
+            array of shape (ngridpts, nmics) containing the transfer matrix for the given frequency
+        """
+        #if self.cached:
+        #    warn('Caching of transfer function is not yet supported!', Warning)
+        #    self.cached = False
+
+        if ind is None:
+            trans = self.calcDipoleTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+        elif not isinstance(ind,ndarray):
+            trans = self.calcDipoleTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+        else:
+            trans = self.calcDipoleTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+        return trans
 
 class SteeringVectorMultipole( SteeringVector ):
     """ 
@@ -350,14 +378,13 @@ class SteeringVectorMultipole( SteeringVector ):
         #if self.cached:
         #    warn('Caching of transfer function is not yet supported!', Warning)
         #    self.cached = False
-        if  self.sourcetype =='Sphericalharmonic':
-            if ind is None:
-                trans = self.calcSphericalHarmonicTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
-            elif not isinstance(ind,ndarray):
-                trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
-            else:
-                trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
-            return trans
+        if ind is None:
+            trans = self.calcSphericalHarmonicTransfer(self.r0, self.rm, array(2*pi*f/self.env.c))
+        elif not isinstance(ind,ndarray):
+            trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :][newaxis], array(2*pi*f/self.env.c))#[0, :]
+        else:
+            trans = self.calcSphericalHarmonicTransfer(self.r0[ind], self.rm[ind, :], array(2*pi*f/self.env.c))
+        return trans
         
 
     
@@ -1965,7 +1992,7 @@ class BeamformerCMF ( BeamformerBase ):
             if not fr[i]:
                 csm = array(self.freq_data.csm[i], dtype='complex128',copy=1)
 
-                if isinstance(self.steer,SteeringVectorMultipole) or isinstance(self.steer,SteeringVectorDipole):
+                if isinstance(self.steer,SteeringVectorMultipole): #,SteeringVectorDipole)
                     # transfer for each source type
                     h = self.steer.transfer(f[i]).T                    
                     Ai =  zeros((h.shape[0],nc*nc, numpoints))

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #pylint: disable-msg=E0611, E1101, C0103, R0901, R0902, R0903, R0904, W0232
 #------------------------------------------------------------------------------
-# Copyright (c) 2007-2020, Acoular Development Team.
+# Copyright (c) 2007-2021, Acoular Development Team.
 #------------------------------------------------------------------------------
 """Implements support for two- and threedimensional grids
 
@@ -484,6 +484,7 @@ class RectGrid( Grid ):
         """
         return (self.x_min, self.x_max, self.y_min, self.y_max)
 
+
 class RectGrid3D( RectGrid):
     """
     Provides a cartesian 3D grid for the beamforming results.
@@ -499,6 +500,14 @@ class RectGrid3D( RectGrid):
     #: The upper z-limit that defines the grid, defaults to 1.
     z_max = Float(1.0,
         desc="maximum  z-value")
+
+    #: Number of grid points along x-axis, readonly.
+    nxsteps = Property(
+        desc="number of grid points along x-axis")
+
+    #: Number of grid points along y-axis, readonly.
+    nysteps = Property(
+        desc="number of grid points along y-axis")
 
     #: Number of grid points along x-axis, readonly.
     nzsteps = Property(
@@ -567,21 +576,21 @@ class RectGrid3D( RectGrid):
     def _get_shape ( self ):
         return (self.nxsteps, self.nysteps, self.nzsteps)
     
-    @property_depends_on('x_min, x_max, increment3D')
+    @property_depends_on('x_min, x_max, _increment')
     def _get_nxsteps ( self ):
         i = abs(self.increment3D[0])
         if i != 0:
             return int(round((abs(self.x_max-self.x_min)+i)/i))
         return 1
 
-    @property_depends_on('y_min, y_max, increment3D')
+    @property_depends_on('y_min, y_max, _increment')
     def _get_nysteps ( self ):
         i = abs(self.increment3D[1])
         if i != 0:
             return int(round((abs(self.y_max-self.y_min)+i)/i))
         return 1
         
-    @property_depends_on('z_min, z_max, increment3D')
+    @property_depends_on('z_min, z_max, _increment')
     def _get_nzsteps ( self ):
         i = abs(self.increment3D[2])
         if i != 0:

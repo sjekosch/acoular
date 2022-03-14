@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #pylint: disable-msg=E0611, E1101, C0103, R0901, R0902, R0903, R0904, W0232
 #------------------------------------------------------------------------------
-# Copyright (c) 2007-2020, Acoular Development Team.
+# Copyright (c) 2007-2021, Acoular Development Team.
 #------------------------------------------------------------------------------
 """Implements processing in the time domain.
 
@@ -42,6 +42,7 @@ int16, nan, concatenate, sum, float64, identity, argsort, interp, arange, append
 linspace, flatnonzero, argmin, argmax, delete, mean, inf, asarray, stack, sinc, exp, \
 polymul, arange, cumsum, ceil, split
 
+from numpy.linalg import norm
 from numpy.matlib import repmat
 
 from scipy.spatial import Delaunay
@@ -693,8 +694,12 @@ class SpatialInterpolator(TimeInOut):
     #: Data source; :class:`~acoular.tprocess.SamplesGenerator` or derived object.
     source = Instance(SamplesGenerator)
     
-    #: Interpolation method in spacial domain, defaults to
-    method = Trait('linear', 'spline', 'rbf-multiquadric', 'rbf-cubic',\
+    #: Interpolation method in spacial domain, defaults to linear
+    #: linear uses numpy linear interpolation
+    #: spline uses scipy CloughTocher algorithm
+    #: rbf is scipy radial basis function with multiquadric, cubic and sinc functions
+    #: idw refers to the inverse distance weighting algorithm 
+    method = Trait('linear', 'spline', 'rbf-multiquadric', 'rbf-cubic','IDW',\
         'custom', 'sinc', desc="method for interpolation used")
     
     #: spacial dimensionality of the array geometry
@@ -710,7 +715,7 @@ class SpatialInterpolator(TimeInOut):
     #: Number of samples in output, as given by :attr:`source`.
     numsamples = Delegate('source', 'numsamples')
     
-    
+
     #:Interpolate a point at the origin of the Array geometry 
     interp_at_zero =  Bool(False)
 
@@ -721,7 +726,13 @@ class SpatialInterpolator(TimeInOut):
     #: The transformation is done via [x,y,z]_mod = Q * [x,y,z]. (default is Identity).
     Q = CArray(dtype=float64, shape=(3, 3), value=identity(3))
     
-    
+    num_IDW= Trait(3,dtype = int, \
+                    desc='number of neighboring microphones, DEFAULT=3')
+
+    p_weight = Trait(2,dtype = float,\
+                desc='used in interpolation for virtual microphone, weighting power exponent for IDW')
+
+
     #: Stores the output of :meth:`_virtNewCoord_func`; Read-Only
     _virtNewCoord_func = Property(depends_on=['mics.digest',
                                               'mics_virtual.digest',
@@ -927,6 +938,8 @@ class SpatialInterpolator(TimeInOut):
         meshList, virtNewCoord, newCoord = self._get_virtNewCoord()
         # pressure interpolation init     
         pInterp = zeros((nTime,nVirtMics))
+        #Coordinates in cartesian CO - for IDW interpolation
+        newCoordCart=cylToCart(newCoord)
         
         if self.interp_at_zero:
             #interpolate point at 0 in Kartesian CO
@@ -1039,10 +1052,30 @@ class SpatialInterpolator(TimeInOut):
                                newCoord[2],
                                pHelp[cntTime, :len(newCoord[0])], function='multiquadric')  # radial basis function interpolator instance
                     
-                    pInterp[cntTime] = rbfi(xInterp[cntTime, :],
-                                            virtNewCoord[1],
-                                            virtNewCoord[2]) 
-                          
+                    virtshiftcoord= array([xInterp[cntTime, :],virtNewCoord[1], virtNewCoord[2]])
+                    pInterp[cntTime] = rbfi(virtshiftcoord[0],
+                                            virtshiftcoord[1],
+                                            virtshiftcoord[2])        
+                # using inverse distance weighting
+                elif self.method=='IDW':                
+                    newPoint2_M = newPoint.T
+                    newPoint3_M = append(newPoint2_M,zeros([1,self.numchannels]),axis=0)
+                    newPointCart = cylToCart(newPoint3_M)
+                    for ind in arange(len(newPoint[:,0])):
+                        newPoint_Rep = repmat(newPointCart[:,ind], len(newPoint[:,0]),1).T  
+                        subtract = newPoint_Rep - newCoordCart
+                        normDistance = norm(subtract,axis=0)
+                        index_norm = argsort(normDistance)[:self.num_IDW]
+                        pHelpNew = pHelp[cntTime,index_norm]
+                        normNew = normDistance[index_norm]
+                        if normNew[0] < 1e-3:
+                            pInterp[cntTime,ind] = pHelpNew[0]
+                        else:
+                            wholeD = sum((1 / normNew ** self.p_weight))
+                            weight = (1 / normNew ** self.p_weight) / wholeD
+                            weight_sum = sum(weight)
+                            pInterp[cntTime,ind] = sum(pHelpNew * weight)
+                 
                                  
         # Interpolation for arbitrary 3D Arrays             
         elif self.array_dimension =='3D':
@@ -1798,9 +1831,11 @@ class TimeCache( TimeInOut ):
                 nodename, (0, self.numchannels), "float32")
         ac = self.h5f.get_data_by_reference(nodename)
         self.h5f.set_node_attribute(ac,'sample_freq',self.sample_freq)
+        self.h5f.set_node_attribute(ac,'complete',False)
         for data in self.source.result(num):
             self.h5f.append_data(ac,data)
             yield data
+        self.h5f.set_node_attribute(ac,'complete',True)
     
     def _get_data_from_cache(self,num):
         nodename = 'tc_' + self.digest
@@ -1809,6 +1844,27 @@ class TimeCache( TimeInOut ):
         while i < ac.shape[0]:
             yield ac[i:i+num]
             i += num
+
+    def _get_data_from_incomplete_cache(self,num):
+        nodename = 'tc_' + self.digest
+        ac = self.h5f.get_data_by_reference(nodename)
+        i = 0
+        nblocks = 0
+        while i+num <= ac.shape[0]:
+            yield ac[i:i+num]
+            nblocks += 1
+            i += num
+        self.h5f.remove_data(nodename)
+        self.h5f.create_extendable_array(
+                nodename, (0, self.numchannels), "float32")
+        ac = self.h5f.get_data_by_reference(nodename)
+        self.h5f.set_node_attribute(ac,'sample_freq',self.sample_freq)
+        self.h5f.set_node_attribute(ac,'complete',False)
+        for j,data in enumerate(self.source.result(num)):
+            self.h5f.append_data(ac,data)
+            if j>=nblocks:
+                yield data
+        self.h5f.set_node_attribute(ac,'complete',True)
 
     # result generator: delivers input, possibly from cache
     def result(self, num):
@@ -1842,6 +1898,17 @@ class TimeCache( TimeInOut ):
                 if config.global_caching == 'overwrite':
                     self.h5f.remove_data(nodename)
                     generator = self._write_data_to_cache
+                elif not self.h5f.get_data_by_reference(nodename).attrs.__contains__('complete'):
+                    if config.global_caching =='readonly':
+                        generator = self._pass_data
+                    else:
+                        generator = self._get_data_from_incomplete_cache
+                elif not self.h5f.get_data_by_reference(nodename).attrs['complete']:
+                    if config.global_caching =='readonly':
+                        warn("Cache file is incomplete for nodename %s. With config.global_caching='readonly', the cache file will not be used!" %str(nodename), Warning, stacklevel = 1)
+                        generator = self._pass_data
+                    else:
+                        generator = self._get_data_from_incomplete_cache
             elif not self.h5f.is_cached(nodename):
                 generator = self._write_data_to_cache
                 if config.global_caching == 'readonly':

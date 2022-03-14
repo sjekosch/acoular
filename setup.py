@@ -1,13 +1,13 @@
 # coding=UTF-8
 #------------------------------------------------------------------------------
-# Copyright (c) 2007-2020, Acoular Development Team.
+# Copyright (c) 2007-2021, Acoular Development Team.
 #------------------------------------------------------------------------------
 
 from setuptools import setup
 from os.path import join, abspath, dirname
 import os
 
-bf_version = "20.10"
+bf_version = "21.05"
 bf_author = "Acoular Development Team"
 
 
@@ -18,21 +18,21 @@ with open(join(here, 'README.rst')) as f:
 
 
 install_requires = list([
-      'numpy>=1.11.3',
+      'numpy<1.21',
       'setuptools',	
-      'numba >=0.40.0',
-      'scipy>=0.1.0',
-      'scikit-learn>=0.19.1',
+      'numba',
+      'scipy>=1.1.0',
+      'scikit-learn<1.0',
       'tables>=3.4.4',
       'traits>=6.0',
 	])
 
 setup_requires = list([
-      'numpy>=1.11.3',
+      'numpy<1.21',
       'setuptools',	
-      'numba >=0.40.0',
-      'scipy>=0.1.0',
-      'scikit-learn>=0.19.1',
+      'numba',
+      'scipy>=1.1.0',
+      'scikit-learn<1.0',
       'tables>=3.4.4',
       'traits>=6.0',
 	])
@@ -51,7 +51,6 @@ setup(name="acoular",
       'Intended Audience :: Science/Research',
       'Topic :: Scientific/Engineering :: Physics',
       'License :: OSI Approved :: BSD License',
-      'Programming Language :: Python :: 3.6',
       'Programming Language :: Python :: 3.7',
       'Programming Language :: Python :: 3.8',
       'Programming Language :: Python :: 3.9',
@@ -62,6 +61,8 @@ setup(name="acoular",
       install_requires = install_requires,
 
       setup_requires = setup_requires,
+
+      python_requires = '>=3.7, <=3.9',
       
       #scripts=[join('examples','acoular_demo.py')],
       include_package_data = True,

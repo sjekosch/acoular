@@ -591,7 +591,7 @@ class FanFlow( FlowField ):
 
 class JointFlow( FlowField ):
     """
-    Provides an analytical approximation of the joint flow field of any two flow fields.
+    Provides an  joint flow field of any two flow fields.
     For example: the fan flow field and the rotating flow field, 
     which could have the same flow field as the virtual rotating microphone array
     

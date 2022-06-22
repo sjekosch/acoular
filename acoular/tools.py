@@ -61,7 +61,7 @@ def return_result(source, nmax=-1, num=128):
         return concatenate(list(resulter))
 
 
-def spherical_hn1(n,z,derivativearccos=False):
+def spherical_hn1(n,z,derivative=False):
    """ Spherical Hankel Function of the First Kind 
    
    """

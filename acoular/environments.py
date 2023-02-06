@@ -18,11 +18,12 @@
 
 """
 import numba as nb
-import numpy as np
 
 from numpy import array, isscalar, float32, float64, newaxis, zeros, \
 sqrt, arange, pi, exp, sin, cos, arccos, zeros_like, empty, dot, hstack, \
-vstack, identity, cross, sign, arctan2, matmul, sum, lexsort, stack, nonzero, append, outer, asarray
+vstack, identity, cross, sign, arctan2, matmul, sum, lexsort, stack, nonzero, \
+append, outer, asarray, load, unique, reshape, gradient, squeeze
+
 from numpy.linalg.linalg import norm
 from scipy.integrate import ode
 from scipy.interpolate import LinearNDInterpolator
@@ -489,10 +490,9 @@ class RotatingFlow( FlowField ):
 
 
 
-class FanFlow( FlowField ):
+class ImportFlow( FlowField ):
     """
-    Provides an analytical approximation of a non-uniform flow field with a stable flow velocity. 
-    Take the fan flow as an example.
+    Provides an analytical approximation of a non-uniform flow field with a stable flow velocity.
     
     
     """
@@ -515,45 +515,44 @@ class FanFlow( FlowField ):
     def _get_caculate(self):
         """
         Calculates velocity and velocity gradient array from the given data, 
-        and do the interpolation
-        
+        and do the interpolation.
         
         """
-        phase = np.load(self.data)
+        phase = load(self.data)
         location = phase[0]
         velocity = phase[1]
         
         ###reshape u,v,w to 3d
-        x = np.unique(location[:,0])
-        y = np.unique(location[:,1])
-        z = np.unique(location[:,2])
+        x = unique(location[:,0])
+        y = unique(location[:,1])
+        z = unique(location[:,2])
         
         xl = len(x)
         yl = len(y)
         zl = len(z)
         
-        u_3d = np.reshape(velocity[:,0], (xl,yl,zl))
-        v_3d = np.reshape(velocity[:,1], (xl,yl,zl))
-        w_3d = np.reshape(velocity[:,2], (xl,yl,zl))
+        u_3d = reshape(velocity[:,0], (xl,yl,zl))
+        v_3d = reshape(velocity[:,1], (xl,yl,zl))
+        w_3d = reshape(velocity[:,2], (xl,yl,zl))
         
         ###u,v,w gradient for x,y,z
-        u_gradx = np.gradient(u_3d, axis=0)
-        u_grady = np.gradient(u_3d, axis=1)
-        u_gradz = np.gradient(u_3d, axis=2)
-        v_gradx = np.gradient(v_3d, axis=0)
-        v_grady = np.gradient(v_3d, axis=1)
-        v_gradz = np.gradient(v_3d, axis=2)
-        w_gradx = np.gradient(w_3d, axis=0)
-        w_grady = np.gradient(w_3d, axis=1)
-        w_gradz = np.gradient(w_3d, axis=2)
+        u_gradx = gradient(u_3d, axis=0)
+        u_grady = gradient(u_3d, axis=1)
+        u_gradz = gradient(u_3d, axis=2)
+        v_gradx = gradient(v_3d, axis=0)
+        v_grady = gradient(v_3d, axis=1)
+        v_gradz = gradient(v_3d, axis=2)
+        w_gradx = gradient(w_3d, axis=0)
+        w_grady = gradient(w_3d, axis=1)
+        w_gradz = gradient(w_3d, axis=2)
         
         ###interpolator for 3D velocity
         velocity_interp = LinearNDInterpolator(location, velocity, fill_value=0)
         
         ###interpolator for u,v,w gradient
-        u_grad = np.array([u_gradx.flatten(), u_grady.flatten(), u_gradz.flatten()]).T
-        v_grad = np.array([v_gradx.flatten(), v_grady.flatten(), v_gradz.flatten()]).T
-        w_grad = np.array([w_gradx.flatten(), w_grady.flatten(), w_gradz.flatten()]).T
+        u_grad = array([u_gradx.flatten(), u_grady.flatten(), u_gradz.flatten()]).T
+        v_grad = array([v_gradx.flatten(), v_grady.flatten(), v_gradz.flatten()]).T
+        w_grad = array([w_gradx.flatten(), w_grady.flatten(), w_gradz.flatten()]).T
         
         u_grad_interp = LinearNDInterpolator(location, u_grad, fill_value=0)
         v_grad_interp = LinearNDInterpolator(location, v_grad, fill_value=0)
@@ -587,7 +586,7 @@ class FanFlow( FlowField ):
         
         ###Jacobi matrix
         dv = array( (ug(xx), vg(xx), wg(xx)) )
-        return np.squeeze(v),np.squeeze(dv)
+        return squeeze(v),squeeze(dv)
 
 
 
@@ -597,7 +596,6 @@ class JointFlow( FlowField ):
     Provides an  joint flow field of any two flow fields.
     For example: the fan flow field and the rotating flow field, 
     which could have the same flow field as the virtual rotating microphone array
-    
     
     """
     ff1 = Instance(FlowField, 

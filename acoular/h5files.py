@@ -172,7 +172,7 @@ if is_h5py:
 
         def get_child_nodes(self, nodename):
             for childnode in self[nodename]:
-                yield (self[f'{nodename}/{childnode}', childnode])
+                yield (childnode, self[f'{nodename}/{childnode}'])
 
 
     class H5CacheFileH5py(H5CacheFileBase, H5FileH5py):

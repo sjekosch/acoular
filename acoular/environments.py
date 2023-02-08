@@ -29,7 +29,7 @@ from scipy.integrate import ode
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import ConvexHull
 from traits.api import HasPrivateTraits, Float, Property, Int, \
-CArray, cached_property, Trait, Dict, File, Instance
+CArray, cached_property, Trait, Dict, File, Instance,property_depends_on
 
 from .internal import digest, ldigest
 
@@ -422,34 +422,56 @@ class OpenJet( FlowField ):
 
 class RotatingFlow( FlowField ):
     """
-    Provides an analytical approximation of the flow field of a rotating fluid with constant flow. 
-
-
+    The class RotatingFlow is a subclass of FlowField and provides an analytical approximation
+    of the flow field of a rotating fluid superimposed with a constant flow. It has several class 
+    attributes which describe the properties of the flow field, such as the origin of the flow, 
+    the flow velocity, and the number of revolutions per minute of the swirl flow.
     """
-    #: velocity at origin, . Defaults to 0.
-    rpm = Float(0.0,
-        desc="revolutions per minute of the virtual array; negative values for clockwise rotation")
 
+    #: Revolutions per minute of the virtual rotating array. Defaults to 0.
+    _rpm_vra  = Float(0.0,
+        desc="revolutions per minute of the virtual rotating array; negative values for clockwise rotation")
+
+    #: Revolutions per minute of the rigid swirl flow.
+    rpm = Float(0.0,
+        desc="revolutions per minute of the rigid swirl flow")
+
+    #: Flow velocity 
     v0 = Float(0.0, 
         desc="flow velocity")
 
-    #: Location of the nozzle center, defaults to the co-ordinate origin.
+    #: Location of the center of rotation, defaults to the co-ordinate origin.
     origin = CArray( dtype=float64, shape=(3, ), value=array((0., 0., 0.)), 
-        desc="center of nozzle")
+        desc="center of rotation")
 
     # internal identifier
     digest = Property(
         depends_on=['v0', 'origin', 'rpm'], 
         )
 
-    # internal identifier
+    # angular speed of the rotation
     omega = Property(
-        depends_on=['rpm'], 
-        )
+        depends_on=['rpm'], )
+
+    #@property_depends_on('_rpm_vra')
+    def _get_rpm(self):
+        return self.rpm
+
+    #@property_depends_on('rpm')
+    def _get_rpm_vra(self):
+        return self._rpm_vra
+
+    @property_depends_on('_rpm_vra')
+    def _set_rpm(self, _rpm_vra):
+        self.rpm = -_rpm_vra
+
+    @property_depends_on('_rpm')
+    def _set_rpm_vra(self, rpm):
+        self._rpm_vra = -rpm
 
     @cached_property
     def _get_omega(self):
-        return 2 * pi * self.rpm / 60
+        return - 2 * pi * self.rpm  / 60
 
     @cached_property
     def _get_digest( self ):
@@ -489,13 +511,13 @@ class RotatingFlow( FlowField ):
 
 
 
-
 class ImportFlow( FlowField ):
     """
-    Provides an analytical approximation of a non-uniform flow field with a stable flow velocity.
-    
+    Provides a data import of a non-uniform flow field with a unchanging 
+    flow velocity. Data has to be given in a numpy data format.
     
     """
+    #: The numpy data file
     data= File()
     
     origin = CArray(dtype=float64, shape=(3, ), value=array((0., 0., 0.)), 
@@ -514,9 +536,7 @@ class ImportFlow( FlowField ):
     @cached_property
     def _get_caculate(self):
         """
-        Calculates velocity and velocity gradient array from the given data, 
-        and do the interpolation.
-        
+        Calculates velocity and velocity gradient array from the given data
         """
         phase = load(self.data)
         location = phase[0]
@@ -545,8 +565,14 @@ class ImportFlow( FlowField ):
         w_gradx = gradient(w_3d, axis=0)
         w_grady = gradient(w_3d, axis=1)
         w_gradz = gradient(w_3d, axis=2)
-        
-        ###interpolator for 3D velocity
+        return location,velocity,u_gradx,u_grady,u_gradz,v_gradx,v_grady,v_gradz,w_gradx,w_grady,w_gradz
+    
+    def calc_interpolation(self):
+        #load data
+        data_values = self.calculate()
+        location,velocity,u_gradx,u_grady,u_gradz,v_gradx,v_grady,v_gradz,w_gradx,w_grady,w_gradz = data_values
+
+        #interpolator for 3D velocity
         velocity_interp = LinearNDInterpolator(location, velocity, fill_value=0)
         
         ###interpolator for u,v,w gradient
@@ -557,9 +583,11 @@ class ImportFlow( FlowField ):
         u_grad_interp = LinearNDInterpolator(location, u_grad, fill_value=0)
         v_grad_interp = LinearNDInterpolator(location, v_grad, fill_value=0)
         w_grad_interp = LinearNDInterpolator(location, w_grad, fill_value=0)
+
         return velocity_interp, u_grad_interp, v_grad_interp, w_grad_interp
-                 
-    def v( self, xx):
+
+
+    def v(self, xx):
         """
         Provides the continuous uneven flow field along the z-Axis as a function of the location.
 
@@ -575,11 +603,11 @@ class ImportFlow( FlowField ):
             second is the Jacobian of the velocity vector field, both at the
             given location.
         """
-        caculate = self.caculate
-        vi = caculate[0]
-        ug = caculate[1]
-        vg = caculate[2]
-        wg = caculate[3]
+        calc_interpolation = self.calc_interpolation
+        vi = calc_interpolation[0]
+        ug = calc_interpolation[1]
+        vg = calc_interpolation[2]
+        wg = calc_interpolation[3]
         
         ###flow field
         v = vi(xx)
@@ -589,18 +617,15 @@ class ImportFlow( FlowField ):
         return squeeze(v),squeeze(dv)
 
 
-
-
 class JointFlow( FlowField ):
     """
-    Provides an  joint flow field of any two flow fields.
-    For example: the fan flow field and the rotating flow field, 
-    which could have the same flow field as the virtual rotating microphone array
-    
+    Provides a joint flow field of any two flow fields. velocities and gradients are added
     """
+    #:First flow field
     ff1 = Instance(FlowField, 
         desc="flow field 1")
     
+    #:Second flow field
     ff2 = Instance(FlowField, 
         desc="flow field 2")
     

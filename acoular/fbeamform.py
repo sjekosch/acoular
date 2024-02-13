@@ -2244,7 +2244,8 @@ class BeamformerSODIX( BeamformerBase ):
                     if all(ac[(i-1)]==0):
                          D0 = ones([numpoints,num_mics])
                     else:
-                         D0 = sqrt(ac[(i-1)])*(trace(array(self.freq_data.csm[i-1], dtype='complex128',copy=1))/trace(csm))
+                         D0 = sqrt(ac[(i-1)]*
+                             (trace(csm)/trace(array(self.freq_data.csm[i-1], dtype='complex128',copy=1))))
                     
                     #boundarys - set to non negative [2*(numpoints*num_mics)]
                     boundarys = tile((0, +inf), (numpoints*num_mics,1))
